@@ -157,6 +157,27 @@ class UserManager:
         
         conn.close()
         return None
+    
+def get_user_by_id(user_id):
+    """Get user by ID for session persistence"""
+    conn = sqlite3.connect('trading_platform.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, username, role, email 
+        FROM users 
+        WHERE id = ? AND is_active = 1
+    ''', (user_id,))
+    user_data = cursor.fetchone()
+    conn.close()
+    
+    if user_data:
+        return {
+            'id': user_data[0],
+            'username': user_data[1],
+            'role': user_data[2],
+            'email': user_data[3]
+        }
+    return None
 
 def save_backtest_results(user_id, symbol, stats, trades, strategy_config=None):
     """Save backtest results to database"""
@@ -1061,7 +1082,7 @@ def get_platform_statistics():
 def main():
     st.set_page_config(page_title="🚀 Professional Trading Platform", layout="wide")
     
-    # ADD THIS MOBILE CSS HERE ⬇️
+    # ADD MOBILE CSS (from previous answer)
     st.markdown("""
     <style>
         .stTabs [data-baseweb="tab-list"] {
@@ -1076,21 +1097,35 @@ def main():
                 flex: 1 1 100% !important;
                 min-width: unset !important;
             }
-            .metric-container {
-                margin-bottom: 1rem;
-            }
         }
     </style>
     """, unsafe_allow_html=True)
-    # CSS ENDS HERE ⬆️
     
     # Initialize database
     setup_database()
     
-    # Initialize session state for authentication
+    # ENHANCED SESSION STATE - ADD THIS ⬇️
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
         st.session_state.user = None
+        st.session_state.remember_me = False
+    
+    # Check for remembered login using query parameters
+    if not st.session_state.authenticated:
+        query_params = st.experimental_get_query_params()
+        if 'user_token' in query_params:
+            # Simple token validation (you can enhance this)
+            try:
+                user_id = int(query_params['user_token'][0])
+                user = get_user_by_id(user_id)
+                if user:
+                    st.session_state.authenticated = True
+                    st.session_state.user = user
+                    st.session_state.remember_me = True
+            except:
+                pass
+    # ENHANCED SESSION ENDS HERE ⬆️
+    
     if 'run_count' not in st.session_state:
         st.session_state.run_count = 0
     if 'trades' not in st.session_state:
@@ -1104,6 +1139,7 @@ def main():
     else:
         show_enhanced_main_app()
 
+
 def show_login_page():
     """Professional authentication interface"""
     st.title("🚀 Professional Trading Platform")
@@ -1111,33 +1147,42 @@ def show_login_page():
     
     tab1, tab2, tab3 = st.tabs(["🔐 Login", "📝 Register", "ℹ️ About"])
     
-    with tab1:
-        st.subheader("Login to Your Account")
+with tab1:
+    st.subheader("Login to Your Account")
+    
+    with st.form("login_form"):
+        col1, col2 = st.columns([2, 1])
         
-        with st.form("login_form"):
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                username = st.text_input("👤 Username", placeholder="Enter your username")
-                password = st.text_input("🔒 Password", type="password", placeholder="Enter your password")
-            
-            with col2:
-                st.write("")
-                st.write("")
-                submitted = st.form_submit_button("🚀 Login", type="primary", use_container_width=True)
-            
-            if submitted:
-                if username and password:
-                    user = UserManager.authenticate(username, password)
-                    if user:
-                        st.session_state.authenticated = True
-                        st.session_state.user = user
-                        st.success(f"Welcome back, {user['username']}!")
-                        st.rerun()
-                    else:
-                        st.error("❌ Invalid username or password!")
+        with col1:
+            username = st.text_input("👤 Username", placeholder="Enter your username")
+            password = st.text_input("🔒 Password", type="password", placeholder="Enter your password")
+            remember_me = st.checkbox("🔄 Keep me logged in", value=True)  # ADD THIS LINE
+        
+        with col2:
+            st.write("")
+            st.write("")
+            st.write("")
+            submitted = st.form_submit_button("🚀 Login", type="primary", use_container_width=True)
+        
+        if submitted:
+            if username and password:
+                user = UserManager.authenticate(username, password)
+                if user:
+                    st.session_state.authenticated = True
+                    st.session_state.user = user
+                    st.session_state.remember_me = remember_me
+                    
+                    # SET PERSISTENT SESSION ⬇️
+                    if remember_me:
+                        st.experimental_set_query_params(user_token=str(user['id']))
+                    # PERSISTENT SESSION ENDS ⬆️
+                    
+                    st.success(f"Welcome back, {user['username']}!")
+                    st.rerun()
                 else:
-                    st.error("❌ Please fill in both username and password!")
+                    st.error("❌ Invalid username or password!")
+            else:
+                st.error("❌ Please fill in both username and password!")
     
     with tab2:
         st.subheader("Create New Account")
@@ -1222,9 +1267,13 @@ def show_enhanced_main_app():
                 st.session_state.show_profile = True
         with col_logout2:
             if st.button("🚪 Logout", use_container_width=True):
+        # CLEAR SESSION ⬇️
                 st.session_state.authenticated = False
-                st.session_state.user = None
-                st.rerun()
+        st.session_state.user = None
+        st.session_state.remember_me = False
+        st.experimental_set_query_params()  # Clear URL parameters
+        # CLEAR SESSION ENDS ⬆️
+        st.rerun()
     
     st.markdown("---")
     
