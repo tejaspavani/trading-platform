@@ -1248,6 +1248,14 @@ def show_login_page():
 def show_enhanced_main_app():
     """Professional dashboard layout without sidebar clutter"""
     
+    # SAFETY CHECK - ADD THIS ⬇️
+    if not st.session_state.authenticated or not st.session_state.user:
+        st.session_state.authenticated = False
+        st.session_state.user = None
+        st.rerun()
+        return
+    # SAFETY CHECK ENDS ⬆️
+    
     # Professional header with user info and logout
     col_header1, col_header2, col_header3 = st.columns([2, 1, 1])
     
@@ -1256,8 +1264,12 @@ def show_enhanced_main_app():
         st.caption("Multi-User Collaborative Trading System")
     
     with col_header2:
-        st.write(f"**Welcome, {st.session_state.user['username']}**")
-        st.caption(f"📧 {st.session_state.user['email']}")
+        # SAFE ACCESS ⬇️
+        username = st.session_state.user.get('username', 'User') if st.session_state.user else 'User'
+        email = st.session_state.user.get('email', '') if st.session_state.user else ''
+        st.write(f"**Welcome, {username}**")
+        st.caption(f"📧 {email}")
+        # SAFE ACCESS ENDS ⬆️
     
     with col_header3:
         col_logout1, col_logout2 = st.columns([1, 1])
@@ -1266,13 +1278,11 @@ def show_enhanced_main_app():
                 st.session_state.show_profile = True
         with col_logout2:
             if st.button("🚪 Logout", use_container_width=True):
-        # CLEAR SESSION ⬇️
                 st.session_state.authenticated = False
-        st.session_state.user = None
-        st.session_state.remember_me = False
-        st.experimental_set_query_params()  # Clear URL parameters
-        # CLEAR SESSION ENDS ⬆️
-        st.rerun()
+                st.session_state.user = None
+                st.session_state.remember_me = False
+                st.query_params.clear()  # Clear URL parameters
+                st.rerun()
     
     st.markdown("---")
     
@@ -1302,6 +1312,13 @@ def show_enhanced_main_app():
 
 def show_professional_dashboard():
     """Professional dashboard with user stats and system info"""
+    
+    # SAFETY CHECK ⬇️
+    if not st.session_state.user:
+        st.error("Session expired. Please login again.")
+        return
+    # SAFETY CHECK ENDS ⬆️
+    
     st.header("📊 Professional Dashboard")
     
     # User Statistics Overview
