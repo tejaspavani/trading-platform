@@ -1061,6 +1061,29 @@ def get_platform_statistics():
 def main():
     st.set_page_config(page_title="🚀 Professional Trading Platform", layout="wide")
     
+    # ADD THIS MOBILE CSS HERE ⬇️
+    st.markdown("""
+    <style>
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+        }
+        .stTabs [data-baseweb="tab"] {
+            padding: 8px 12px;
+        }
+        @media (max-width: 768px) {
+            .stColumns > div {
+                width: 100% !important;
+                flex: 1 1 100% !important;
+                min-width: unset !important;
+            }
+            .metric-container {
+                margin-bottom: 1rem;
+            }
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    # CSS ENDS HERE ⬆️
+    
     # Initialize database
     setup_database()
     
