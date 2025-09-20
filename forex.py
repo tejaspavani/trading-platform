@@ -1147,42 +1147,40 @@ def show_login_page():
     
     tab1, tab2, tab3 = st.tabs(["🔐 Login", "📝 Register", "ℹ️ About"])
     
-with tab1:
-    st.subheader("Login to Your Account")
-    
-    with st.form("login_form"):
-        col1, col2 = st.columns([2, 1])
+    with tab1:
+        st.subheader("Login to Your Account")
         
-        with col1:
-            username = st.text_input("👤 Username", placeholder="Enter your username")
-            password = st.text_input("🔒 Password", type="password", placeholder="Enter your password")
-            remember_me = st.checkbox("🔄 Keep me logged in", value=True)  # ADD THIS LINE
-        
-        with col2:
-            st.write("")
-            st.write("")
-            st.write("")
-            submitted = st.form_submit_button("🚀 Login", type="primary", use_container_width=True)
-        
-        if submitted:
-            if username and password:
-                user = UserManager.authenticate(username, password)
-                if user:
-                    st.session_state.authenticated = True
-                    st.session_state.user = user
-                    st.session_state.remember_me = remember_me
-                    
-                    # SET PERSISTENT SESSION ⬇️
-                    if remember_me:
-                        st.experimental_set_query_params(user_token=str(user['id']))
-                    # PERSISTENT SESSION ENDS ⬆️
-                    
-                    st.success(f"Welcome back, {user['username']}!")
-                    st.rerun()
+        with st.form("login_form"):
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                username = st.text_input("👤 Username", placeholder="Enter your username")
+                password = st.text_input("🔒 Password", type="password", placeholder="Enter your password")
+                remember_me = st.checkbox("🔄 Keep me logged in", value=True)
+            
+            with col2:
+                st.write("")
+                st.write("")
+                st.write("")
+                submitted = st.form_submit_button("🚀 Login", type="primary", use_container_width=True)
+            
+            if submitted:
+                if username and password:
+                    user = UserManager.authenticate(username, password)
+                    if user:
+                        st.session_state.authenticated = True
+                        st.session_state.user = user
+                        st.session_state.remember_me = remember_me
+                        
+                        if remember_me:
+                            st.experimental_set_query_params(user_token=str(user['id']))
+                        
+                        st.success(f"Welcome back, {user['username']}!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Invalid username or password!")
                 else:
-                    st.error("❌ Invalid username or password!")
-            else:
-                st.error("❌ Please fill in both username and password!")
+                    st.error("❌ Please fill in both username and password!")
     
     with tab2:
         st.subheader("Create New Account")
@@ -1245,6 +1243,7 @@ with tab1:
         3. Run backtests and save results
         4. Invite friends to create their own accounts
         """)
+
 
 def show_enhanced_main_app():
     """Professional dashboard layout without sidebar clutter"""
