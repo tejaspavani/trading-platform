@@ -1082,7 +1082,7 @@ def get_platform_statistics():
 def main():
     st.set_page_config(page_title="🚀 Professional Trading Platform", layout="wide")
     
-    # ADD MOBILE CSS (from previous answer)
+    # Mobile CSS
     st.markdown("""
     <style>
         .stTabs [data-baseweb="tab-list"] {
@@ -1104,7 +1104,7 @@ def main():
     # Initialize database
     setup_database()
     
-    # ENHANCED SESSION STATE - ADD THIS ⬇️
+    # Enhanced session state
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
         st.session_state.user = None
@@ -1112,11 +1112,9 @@ def main():
     
     # Check for remembered login using query parameters
     if not st.session_state.authenticated:
-        query_params = st.experimental_get_query_params()
-        if 'user_token' in query_params:
-            # Simple token validation (you can enhance this)
+        if 'user_token' in st.query_params:  # <- NEW API
             try:
-                user_id = int(query_params['user_token'][0])
+                user_id = int(st.query_params['user_token'])  # <- NEW API
                 user = get_user_by_id(user_id)
                 if user:
                     st.session_state.authenticated = True
@@ -1124,8 +1122,8 @@ def main():
                     st.session_state.remember_me = True
             except:
                 pass
-    # ENHANCED SESSION ENDS HERE ⬆️
     
+    # Rest of session state
     if 'run_count' not in st.session_state:
         st.session_state.run_count = 0
     if 'trades' not in st.session_state:
@@ -1138,6 +1136,7 @@ def main():
         show_login_page()
     else:
         show_enhanced_main_app()
+
 
 
 def show_login_page():
@@ -1173,7 +1172,7 @@ def show_login_page():
                         st.session_state.remember_me = remember_me
                         
                         if remember_me:
-                            st.experimental_set_query_params(user_token=str(user['id']))
+                            st.query_params['user_token'] = str(user['id'])
                         
                         st.success(f"Welcome back, {user['username']}!")
                         st.rerun()
@@ -1537,6 +1536,9 @@ def show_enhanced_backtesting():
                     st.subheader(verdict)
                     
                     # Save results to database
+                    if not st.session_state.user:
+                        st.error("Please login to save results.")
+                    return
                     backtest_id = save_backtest_results(
                         st.session_state.user['id'], symbol, stats, trades
                     )
@@ -1761,6 +1763,9 @@ def show_live_demo():
             st.error(f"❌ Error fetching live  {str(e)}")
 
 def show_user_results_history():
+    if not st.session_state.user:
+        st.error("Please login to view results.")
+        return
     """Show user's complete backtesting history"""
     st.header("📈 My Trading Results History")
     
