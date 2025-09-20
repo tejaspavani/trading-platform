@@ -1,0 +1,56 @@
+2025-09-15 17:15:03,670 - INFO - Project created at: /Users/tejaspavani/forex_trading_system
+🚀 HYBRID LSTM-TRANSFORMER FOREX TRADING SYSTEM
+Optimized for Mac M2
+============================================================
+🚀 Starting Forex Trading System for EURUSD
+==================================================
+2025-09-15 17:15:03,671 - INFO - Random seed set to: 1757942103
+2025-09-15 17:15:03,671 - INFO - Generating 30 days of EURUSD data...
+2025-09-15 17:15:03,697 - INFO - Generated 43,201 data points
+2025-09-15 17:15:03,697 - INFO - Calculating technical indicators...
+2025-09-15 17:15:03,737 - INFO - Calculated 23+ indicators
+2025-09-15 17:15:03,737 - INFO - Generating trading signals...
+2025-09-15 17:15:03,789 - INFO - Generated 0 trading signals
+2025-09-15 17:15:03,789 - INFO - Running backtest...
+2025-09-15 17:15:03,794 - INFO - Backtest completed
+
+============================================================
+FOREX TRADING SYSTEM RESULTS
+============================================================
+Initial Balance:      $10,000.00
+Final Equity:         $10,000.00
+Total Return:         0.00%
+
+----------------------------------------
+TRADE STATISTICS
+----------------------------------------
+Total Trades:         0
+Winning Trades:       0
+Win Rate:             0.00%
+Average Win:          $0.00
+Average Loss:         $0.00
+
+🟢 PROFITABLE STRATEGY
+
+============================================================
+🎯 SYSTEM SUMMARY
+============================================================
+Symbol:               EURUSD
+Data Points:          43,201
+Indicators:           23+
+Signals Generated:    0
+System Status:        ✅ Operational
+
+🚀 NEXT STEPS:
+1. Try different currency pairs
+2. Adjust indicator parameters
+3. Tune confidence threshold / cooldown
+4. Paper trade before going live
+5. Add live data feeds if desired
+
+⚠️  DISCLAIMERS:
+- Educational purposes only
+- Past performance ≠ future results
+- Start with paper trading
+- Never risk more than you can afford
+

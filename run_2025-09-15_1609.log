@@ -1,0 +1,51 @@
+🚀 HYBRID LSTM-TRANSFORMER FOREX TRADING SYSTEM
+Optimized for Mac M2
+============================================================
+🚀 Starting Forex Trading System for EURUSD
+==================================================
+
+============================================================
+FOREX TRADING SYSTEM RESULTS
+============================================================
+Initial Balance:      $10,000.00
+Final Equity:         $8,376.92
+Total Return:         -16.23%
+
+----------------------------------------
+TRADE STATISTICS
+----------------------------------------
+Total Trades:         1659
+Winning Trades:       134
+Win Rate:             8.08%
+Average Win:          $0.06
+Average Loss:         $-1.07
+
+🔴 LOSS-MAKING STRATEGY
+
+============================================================
+🎯 SYSTEM SUMMARY
+============================================================
+Symbol:               EURUSD
+Data Points:          43,201
+Indicators:           19
+Signals Generated:    43,152
+System Status:        ✅ Operational
+
+🚀 NEXT STEPS:
+1. Try different currency pairs
+2. Adjust indicator parameters
+3. Implement risk management
+4. Add live data feeds
+5. Paper trade before going live
+
+⚠️  DISCLAIMERS:
+- This is for educational purposes
+- Past performance ≠ future results
+- Start with paper trading
+- Never risk more than you can afford
+
+✅ SYSTEM READY!
+
+To test other pairs:
+system.run_complete_system('GBPUSD', days=60)
+system.run_complete_system('USDJPY', days=45)
