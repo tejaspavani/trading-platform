@@ -1802,132 +1802,118 @@ if 'trading_engines' not in st.session_state:
     st.session_state.trading_engines = {}
 
 def get_trading_engine(user_id):
-    """Get or create trading engine for user - SAFE VERSION"""
+    """Get or create trading engine for user - ULTRA SAFE VERSION"""
+    
+    # Ensure session state is properly initialized
+    if 'trading_engines' not in st.session_state:
+        st.session_state.trading_engines = {}
+    
+    # Validate user_id
+    if not user_id:
+        st.error("Invalid user ID")
+        return create_dummy_engine()
+    
     try:
-        # Ensure trading_engines is initialized
-        if 'trading_engines' not in st.session_state:
-            st.session_state.trading_engines = {}
-        
-        # Ensure user_id is valid
-        if not user_id:
-            raise ValueError("Invalid user_id")
-        
         # Create engine if doesn't exist
         if user_id not in st.session_state.trading_engines:
             st.session_state.trading_engines[user_id] = LiveTradingEngine(user_id)
         
         engine = st.session_state.trading_engines[user_id]
         
-        # Ensure positions dict is initialized
+        # Ensure engine has all required attributes
         if not hasattr(engine, 'positions') or engine.positions is None:
             engine.positions = {}
         
         return engine
         
     except Exception as e:
-        st.error(f"Error creating trading engine: {str(e)}")
-        # Return a safe dummy engine
-        class SafeEngine:
-            def __init__(self):
-                self.positions = {}
-                self.balance = 10000.0
-                self.equity = 10000.0
-                
-            def get_status(self):
-                return {
-                    'balance': self.balance,
-                    'equity': self.equity,
-                    'positions': 0,
-                    'total_pnl': 0.0,
-                    'is_running': False
-                }
-                
-            def start_trading(self):
-                return False
-                
-            def stop_trading(self):
-                return False
-                
-            def add_signal(self, signal):
-                pass
-                
-            def _close_position(self, pos_key, reason):
-                pass
-        
-        return SafeEngine()
+        st.error(f"Error with trading engine: {str(e)}")
+        return create_dummy_engine()
+
+def create_dummy_engine():
+    """Create a safe dummy engine when real engine fails"""
+    class DummyEngine:
+        def __init__(self):
+            self.positions = {}
+            self.balance = 10000.0
+            self.equity = 10000.0
+            self.is_running = False
+            
+        def get_status(self):
+            return {
+                'balance': self.balance,
+                'equity': self.equity,
+                'positions': 0,
+                'total_pnl': 0.0,
+                'is_running': self.is_running
+            }
+            
+        def start_trading(self):
+            return False
+            
+        def stop_trading(self):
+            return False
+            
+        def add_signal(self, signal):
+            pass
+            
+        def _close_position(self, pos_key, reason):
+            pass
+    
+    return DummyEngine()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # MAIN APPLICATION
 # ──────────────────────────────────────────────────────────────────────────────
-def ensure_session_defaults():
-    defaults = {
-        "authenticated": False,
-        "user": None,
-        "remember_me": False,
-        "trading_engines": {},
-        "chat_history": [],
-        "run_count": 0,
-        "live_analysis": None,
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
 def main():
     st.set_page_config(page_title="🤖 AI Trading Platform", layout="wide")
-    
-    # Mobile-friendly CSS
-    st.markdown("""
-    <style>
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 8px;
-        }
-        .stTabs [data-baseweb="tab"] {
-            padding: 8px 12px;
-        }
-        @media (max-width: 768px) {
-            .stColumns > div {
-                width: 100% !important;
-                flex: 1 1 100% !important;
-                min-width: unset !important;
-            }
-        }
-    </style>
-    """, unsafe_allow_html=True)
     
     # Initialize database
     setup_database()
     
-    # Enhanced session state
+    # ✅ PROPER SESSION STATE INITIALIZATION (following Streamlit best practices)
+    
+    # Authentication states
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
+    
+    if 'user' not in st.session_state:
         st.session_state.user = None
+    
+    if 'remember_me' not in st.session_state:
         st.session_state.remember_me = False
     
-    # Check for remembered login using query parameters
-    if not st.session_state.authenticated:
-        if 'user_token' in st.query_params:
-            try:
-                user_id = int(st.query_params['user_token'])
-                user = get_user_by_id(user_id)
-                if user:
-                    st.session_state.authenticated = True
-                    st.session_state.user = user
-                    st.session_state.remember_me = True
-            except:
-                pass
+    # Trading engine states
+    if 'trading_engines' not in st.session_state:
+        st.session_state.trading_engines = {}
     
-    # Initialize other session states
-    if 'run_count' not in st.session_state:
-        st.session_state.run_count = 0
+    # Chat history
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
-
-    # Show login page or main app
+    
+    # Other states
+    if 'run_count' not in st.session_state:
+        st.session_state.run_count = 0
+    
+    # Check for remembered login
+    if not st.session_state.authenticated and 'user_token' in st.query_params:
+        try:
+            user_id = int(st.query_params['user_token'])
+            user = get_user_by_id(user_id)
+            if user:
+                st.session_state.authenticated = True
+                st.session_state.user = user
+                st.session_state.remember_me = True
+        except:
+            pass
+    
+    # Show login or main app
     if not st.session_state.authenticated:
         show_login_page()
     else:
         show_enhanced_main_app()
+
 
 def show_login_page():
     """Professional authentication interface"""
