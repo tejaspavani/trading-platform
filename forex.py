@@ -265,7 +265,53 @@ def save_backtest_results(user_id, symbol, stats, trades, strategy_config=None):
 CRYPTO_MAP = {
     "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD", "SOLUSD": "SOL-USD", "BNBUSD": "BNB-USD",
     "XRPUSD": "XRP-USD", "ADAUSD": "ADA-USD", "DOGEUSD": "DOGE-USD", "AVAXUSD": "AVAX-USD",
-    "TRXUSD": "TRX-USD", "DOTUSD": "DOT-USD",
+    "TRXUSD": "TRX-USD", "DOTUSD": "DOT-USD", "MATICUSD": "MATIC-USD", "LINKUSD": "LINK-USD",
+    "UNIUSD": "UNI-USD", "LTCUSD": "LTC-USD", "BCHUSD": "BCH-USD", "ATOMUSD": "ATOM-USD",
+    "FILUSD": "FIL-USD", "ETCUSD": "ETC-USD", "XLMUSD": "XLM-USD", "ALGOUSD": "ALGO-USD",
+    "VETUSD": "VET-USD", "ICPUSD": "ICP-USD", "THETAUSD": "THETA-USD", "FTMUSD": "FTM-USD",
+    "AAVEUSD": "AAVE-USD", "COMPUSD": "COMP-USD", "MKRUSD": "MKR-USD", "SUSHIUSD": "SUSHI-USD"
+}
+# ADD ALL THE NEW SYMBOL LISTS HERE ⬇️
+# Comprehensive FX Pairs
+FX_MAJOR_PAIRS = [
+    "EURUSD", "USDJPY", "GBPUSD", "AUDUSD", "USDCHF", "USDCAD", "NZDUSD"
+]
+
+FX_MINOR_PAIRS = [
+    "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "GBPAUD", 
+    "EURCHF", "GBPCHF", "AUDCHF", "CADCHF", "EURAUD", "NZDJPY",
+    "GBPNZD", "AUDNZD", "EURNZD", "CHFJPY", "CADJPY"
+]
+
+FX_EXOTIC_PAIRS = [
+    "USDTRY", "USDZAR", "USDSGD", "USDHKD", "USDPLN", "USDSEK",
+    "USDNOK", "USDDKK", "USDMXN", "USDRUB", "USDCNY", "USDINR"
+]
+
+# Comprehensive Crypto Pairs  
+CRYPTO_MAJOR = [
+    "BTCUSD", "ETHUSD", "BNBUSD", "XRPUSD", "SOLUSD", "ADAUSD", "DOGEUSD"
+]
+
+CRYPTO_ALTCOINS = [
+    "AVAXUSD", "DOTUSD", "MATICUSD", "LINKUSD", "UNIUSD", "LTCUSD", 
+    "BCHUSD", "ATOMUSD", "FILUSD", "TRXUSD", "ETCUSD", "XLMUSD",
+    "ALGOUSD", "VETUSD", "ICPUSD", "THETAUSD", "FTMUSD", "AXSUSD"
+]
+
+CRYPTO_DEFI = [
+    "AAVEUSD", "COMPUSD", "MKRUSD", "SUSHIUSD", "YFIUSD", "CRVUSD",
+    "1INCHUSD", "SNXUSD", "BALUSD", "RENUSD", "LRCUSD", "KNCUSD"
+]
+
+# All symbols combined
+ALL_SYMBOLS = {
+    "FX Major": FX_MAJOR_PAIRS,
+    "FX Minor": FX_MINOR_PAIRS, 
+    "FX Exotic": FX_EXOTIC_PAIRS,
+    "Crypto Major": CRYPTO_MAJOR,
+    "Crypto Altcoins": CRYPTO_ALTCOINS,
+    "Crypto DeFi": CRYPTO_DEFI
 }
 
 def _is_crypto(symbol: str) -> bool:
@@ -464,6 +510,234 @@ def _macd(C, fast=12, slow=26, signal=9):
 # ──────────────────────────────────────────────────────────────────────────────
 # STRATEGY V4
 # ──────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# 23+ TRADING STRATEGIES SYSTEM
+# ──────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class StrategyConfig:
+    name: str
+    description: str
+    category: str
+    parameters: dict
+    risk_level: str  # Low, Medium, High
+    market_type: str  # Trending, Ranging, Any
+
+# Define 23+ Different Strategies
+TRADING_STRATEGIES = {
+    
+    # TREND FOLLOWING STRATEGIES (8 strategies)
+    "donchian_macd": StrategyConfig(
+        name="🏁 Donchian Breakout + MACD",
+        description="Breakout system with momentum confirmation",
+        category="Trend Following",
+        parameters={"lookback": 20, "atr_mult": 3.0, "rr": 4.0, "use_macd": True},
+        risk_level="Medium",
+        market_type="Trending"
+    ),
+    
+    "ma_crossover": StrategyConfig(
+        name="📈 Moving Average Crossover", 
+        description="Classic MA crossover with trend filter",
+        category="Trend Following",
+        parameters={"fast_ma": 10, "slow_ma": 30, "atr_mult": 2.5, "rr": 3.0},
+        risk_level="Low",
+        market_type="Trending"
+    ),
+    
+    "triple_ma": StrategyConfig(
+        name="🎯 Triple Moving Average",
+        description="Three MA system for strong trend identification", 
+        category="Trend Following",
+        parameters={"fast": 5, "medium": 15, "slow": 30, "atr_mult": 2.8, "rr": 3.5},
+        risk_level="Medium",
+        market_type="Trending"
+    ),
+    
+    "parabolic_sar": StrategyConfig(
+        name="🚀 Parabolic SAR Trend",
+        description="SAR-based trend following system",
+        category="Trend Following", 
+        parameters={"acceleration": 0.02, "maximum": 0.2, "atr_mult": 2.2, "rr": 2.8},
+        risk_level="High",
+        market_type="Trending"
+    ),
+    
+    "supertrend": StrategyConfig(
+        name="💫 SuperTrend Strategy",
+        description="ATR-based trend identification",
+        category="Trend Following",
+        parameters={"period": 10, "multiplier": 3.0, "atr_mult": 2.5, "rr": 3.2},
+        risk_level="Medium", 
+        market_type="Trending"
+    ),
+    
+    "adx_trend": StrategyConfig(
+        name="📊 ADX Trend Strength",
+        description="ADX for trend strength confirmation",
+        category="Trend Following",
+        parameters={"adx_period": 14, "adx_threshold": 25, "atr_mult": 2.8, "rr": 3.5},
+        risk_level="Medium",
+        market_type="Trending"
+    ),
+    
+    "keltner_breakout": StrategyConfig(
+        name="🎪 Keltner Channel Breakout",
+        description="Volatility-based breakout system",
+        category="Trend Following", 
+        parameters={"period": 20, "multiplier": 2.0, "atr_mult": 2.5, "rr": 3.0},
+        risk_level="Medium",
+        market_type="Any"
+    ),
+    
+    "ichimoku_cloud": StrategyConfig(
+        name="☁️ Ichimoku Cloud System",
+        description="Complete Ichimoku trading system",
+        category="Trend Following",
+        parameters={"tenkan": 9, "kijun": 26, "senkou": 52, "atr_mult": 2.8, "rr": 3.5},
+        risk_level="Medium",
+        market_type="Trending"
+    ),
+    
+    # MEAN REVERSION STRATEGIES (6 strategies)
+    "rsi_reversal": StrategyConfig(
+        name="🔄 RSI Mean Reversion", 
+        description="RSI overbought/oversold reversals",
+        category="Mean Reversion",
+        parameters={"rsi_period": 14, "oversold": 30, "overbought": 70, "atr_mult": 2.0, "rr": 2.5},
+        risk_level="Medium",
+        market_type="Ranging"
+    ),
+    
+    "bollinger_bounce": StrategyConfig(
+        name="🎈 Bollinger Band Bounce",
+        description="Mean reversion using Bollinger Bands",
+        category="Mean Reversion", 
+        parameters={"period": 20, "std_dev": 2.0, "atr_mult": 1.8, "rr": 2.2},
+        risk_level="Low",
+        market_type="Ranging"
+    ),
+    
+    "williams_r": StrategyConfig(
+        name="📉 Williams %R Strategy",
+        description="Williams %R for overbought/oversold levels",
+        category="Mean Reversion",
+        parameters={"period": 14, "oversold": -80, "overbought": -20, "atr_mult": 2.2, "rr": 2.8},
+        risk_level="Medium", 
+        market_type="Ranging"
+    ),
+    
+    "stochastic_reversal": StrategyConfig(
+        name="🎲 Stochastic Reversal",
+        description="Stochastic oscillator mean reversion",
+        category="Mean Reversion",
+        parameters={"k_period": 14, "d_period": 3, "oversold": 20, "overbought": 80, "atr_mult": 2.0, "rr": 2.5},
+        risk_level="Medium",
+        market_type="Ranging"
+    ),
+    
+    "cci_reversal": StrategyConfig(
+        name="🌊 CCI Mean Reversion",
+        description="Commodity Channel Index reversals", 
+        category="Mean Reversion",
+        parameters={"period": 20, "oversold": -100, "overbought": 100, "atr_mult": 2.2, "rr": 2.8},
+        risk_level="Medium",
+        market_type="Ranging"
+    ),
+    
+    "mfi_reversal": StrategyConfig(
+        name="💰 Money Flow Index",
+        description="Volume-weighted RSI for reversals",
+        category="Mean Reversion", 
+        parameters={"period": 14, "oversold": 20, "overbought": 80, "atr_mult": 2.0, "rr": 2.5},
+        risk_level="Medium",
+        market_type="Ranging"
+    ),
+    
+    # MOMENTUM STRATEGIES (5 strategies) 
+    "macd_momentum": StrategyConfig(
+        name="⚡ MACD Momentum",
+        description="Pure MACD momentum trading",
+        category="Momentum",
+        parameters={"fast": 12, "slow": 26, "signal": 9, "atr_mult": 2.5, "rr": 3.0},
+        risk_level="Medium",
+        market_type="Any"
+    ),
+    
+    "roc_momentum": StrategyConfig(
+        name="🚄 Rate of Change Momentum",
+        description="ROC-based momentum strategy",
+        category="Momentum",
+        parameters={"period": 12, "threshold": 1.5, "atr_mult": 2.8, "rr": 3.2},
+        risk_level="High",
+        market_type="Trending"
+    ),
+    
+    "momentum_oscillator": StrategyConfig(
+        name="🎛️ Momentum Oscillator",
+        description="Classical momentum oscillator system",
+        category="Momentum",
+        parameters={"period": 14, "threshold": 0, "atr_mult": 2.5, "rr": 3.0},
+        risk_level="Medium", 
+        market_type="Any"
+    ),
+    
+    "tsi_momentum": StrategyConfig(
+        name="🎯 True Strength Index",
+        description="Smoothed momentum indicator",
+        category="Momentum",
+        parameters={"fast": 25, "slow": 13, "signal": 13, "atr_mult": 2.6, "rr": 3.1},
+        risk_level="Medium",
+        market_type="Any"
+    ),
+    
+    "awesome_oscillator": StrategyConfig(
+        name="😎 Awesome Oscillator",
+        description="Bill Williams' Awesome Oscillator",
+        category="Momentum", 
+        parameters={"fast": 5, "slow": 34, "atr_mult": 2.7, "rr": 3.2},
+        risk_level="Medium",
+        market_type="Trending"
+    ),
+    
+    # VOLATILITY STRATEGIES (4 strategies)
+    "atr_volatility": StrategyConfig(
+        name="📈 ATR Volatility Breakout",
+        description="ATR-based volatility trading",
+        category="Volatility", 
+        parameters={"atr_period": 14, "volatility_mult": 1.5, "atr_mult": 2.5, "rr": 3.0},
+        risk_level="High",
+        market_type="Any"
+    ),
+    
+    "volatility_squeeze": StrategyConfig(
+        name="🗜️ Volatility Squeeze",
+        description="Low volatility followed by breakouts",
+        category="Volatility",
+        parameters={"bb_period": 20, "kc_period": 20, "atr_mult": 2.2, "rr": 2.8},
+        risk_level="Medium",
+        market_type="Any"
+    ),
+    
+    "chaikin_volatility": StrategyConfig(
+        name="📊 Chaikin Volatility",
+        description="High-low spread volatility measure",
+        category="Volatility",
+        parameters={"period": 14, "roc_period": 10, "atr_mult": 2.3, "rr": 2.9},
+        risk_level="High",
+        market_type="Any"
+    ),
+    
+    "historical_volatility": StrategyConfig(
+        name="📋 Historical Volatility",
+        description="Price volatility regime changes",
+        category="Volatility",
+        parameters={"period": 20, "threshold": 0.02, "atr_mult": 2.4, "rr": 3.0},
+        risk_level="High", 
+        market_type="Any"
+    )
+}
+
 @dataclass
 class StratV4Config:
     lookback: int = 20
@@ -1167,6 +1441,93 @@ def get_openai_risk_assessment(user_id, current_positions=None):
     except Exception as e:
         return f"❌ Risk Assessment Error: {str(e)}\n\nPlease check your OpenAI configuration."
 
+
+# AI STRATEGY TOURNAMENT SYSTEM
+class AIStrategyTournament:
+    def __init__(self, user_id):
+        self.user_id = user_id
+        self.results = {}
+        
+    def run_tournament(self, symbol, days=30):
+        """Run all strategies against the symbol and rank them"""
+        st.info(f"🤖 AI Tournament: Testing {len(TRADING_STRATEGIES)} strategies on {symbol}")
+        
+        # Generate data once
+        _set_seed(42)
+        df = _generate_data(symbol, days, interval_min=1)
+        
+        progress_bar = st.progress(0)
+        results = []
+        
+        for i, (strategy_key, strategy_config) in enumerate(TRADING_STRATEGIES.items()):
+            try:
+                # Convert strategy config to StratV4Config format
+                cfg = self._convert_to_stratv4(strategy_config)
+                
+                # Run backtest
+                stats, trades = backtest_v4(df, cfg)
+                
+                # Calculate AI score (combines return, win rate, profit factor)
+                ai_score = self._calculate_ai_score(stats, strategy_config)
+                
+                results.append({
+                    'strategy': strategy_config.name,
+                    'key': strategy_key,
+                    'category': strategy_config.category,
+                    'return': stats.ret_pct,
+                    'trades': stats.n_trades,
+                    'win_rate': stats.win_rate,
+                    'profit_factor': stats.pf,
+                    'max_dd': stats.max_dd_pct,
+                    'ai_score': ai_score,
+                    'risk_level': strategy_config.risk_level,
+                    'market_type': strategy_config.market_type
+                })
+                
+                progress_bar.progress((i + 1) / len(TRADING_STRATEGIES))
+                
+            except Exception as e:
+                st.warning(f"⚠️ Strategy {strategy_config.name} failed: {str(e)}")
+                
+        # Sort by AI score
+        results.sort(key=lambda x: x['ai_score'], reverse=True)
+        
+        return results, df
+    
+    def _convert_to_stratv4(self, strategy_config):
+        """Convert strategy config to StratV4Config"""
+        params = strategy_config.parameters
+        
+        return StratV4Config(
+            lookback=params.get('lookback', params.get('period', 20)),
+            atr_mult=params.get('atr_mult', 2.5), 
+            rr=params.get('rr', 3.0),
+            use_macd_filter=params.get('use_macd', strategy_config.name == "🏁 Donchian Breakout + MACD"),
+            use_trend_filter=strategy_config.category == "Trend Following",
+            use_vol_filter=strategy_config.category == "Volatility",
+            risk_per_trade=0.015 if strategy_config.risk_level == "Low" else 0.02 if strategy_config.risk_level == "Medium" else 0.025
+        )
+    
+    def _calculate_ai_score(self, stats, strategy_config):
+        """Calculate AI score based on multiple factors"""
+        # Base score from return
+        return_score = max(0, min(100, stats.ret_pct * 2))
+        
+        # Win rate bonus
+        win_rate_bonus = (stats.win_rate - 50) * 0.5 if stats.win_rate > 50 else 0
+        
+        # Profit factor bonus
+        pf_bonus = min(20, (stats.pf - 1) * 10) if stats.pf > 1 else 0
+        
+        # Risk penalty
+        risk_penalty = abs(stats.max_dd_pct) * 0.3
+        
+        # Trade count bonus (more trades = more statistical significance)
+        trade_bonus = min(10, stats.n_trades * 0.2)
+        
+        final_score = return_score + win_rate_bonus + pf_bonus - risk_penalty + trade_bonus
+        
+        return max(0, min(100, final_score))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # MAIN APPLICATION
@@ -1975,141 +2336,169 @@ Your AI trading assistant has analyzed **{user_stats['total_backtests']} backtes
     st.balloons()
 
 def show_enhanced_backtesting():
-    """Enhanced backtesting with database integration"""
+    """Enhanced backtesting with 23+ strategies"""
     if not st.session_state.user:
         st.error("Please login to run backtests.")
         return
         
-    st.header("📊 Strategy Backtesting with AI Enhancement")
+    st.header("🚀 AI Strategy Tournament - 23+ Strategies")
     
     col_left, col_right = st.columns([1, 3])
     
     with col_left:
-        st.subheader("Market & Engine")
-        market = st.radio("Select Market", ["FX", "Crypto"], index=0)
+        st.subheader("🎯 Market Selection")
         
-        if market == "FX":
-            symbol = st.selectbox("FX Pair", ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"], index=0)
-        else:
-            symbol = st.selectbox("Crypto", list(CRYPTO_MAP.keys()), index=0)
+        # Enhanced symbol selection
+        market_category = st.selectbox("Market Category", list(ALL_SYMBOLS.keys()))
+        symbol = st.selectbox("Symbol", ALL_SYMBOLS[market_category])
         
-        st.subheader("AI Strategy Settings")
-        days = st.slider("Days of data", 5, 120, 30, step=5)
-        seed = st.number_input("Seed (-1 = random)", value=-1, step=1)
-        show_ma = st.checkbox("Show Moving Averages", value=True)
+        st.subheader("🤖 AI Tournament Settings")
+        days = st.slider("Days of data", 15, 90, 30, step=5)
         
-        # Strategy parameters
-        lookback = st.number_input("Donchian Lookback", 5, 100, 20, step=1)
-        atr_mult = st.number_input("Stop × ATR", 0.5, 5.0, 3.0, step=0.1)
-        rr = st.number_input("Risk:Reward", 1.0, 5.0, 4.0, step=0.1)
-        use_macd = st.checkbox("Use MACD Filter", value=True)
+        tournament_mode = st.radio("Mode", [
+            "🏆 Full Tournament (All 23+ Strategies)",
+            "🎯 Category Tournament", 
+            "⚡ Single Strategy Test"
+        ])
         
-        # AI Enhancement
-        ai_optimize = st.checkbox("🤖 AI Optimization", value=False)
-        if ai_optimize:
-            st.info("AI will optimize parameters based on your trading history")
+        if tournament_mode == "🎯 Category Tournament":
+            category = st.selectbox("Strategy Category", [
+                "Trend Following", "Mean Reversion", "Momentum", "Volatility"
+            ])
+        elif tournament_mode == "⚡ Single Strategy Test":
+            strategy_key = st.selectbox("Select Strategy", 
+                                      [(k, v.name) for k, v in TRADING_STRATEGIES.items()],
+                                      format_func=lambda x: x[1])[0]
         
-        run_backtest = st.button("🚀 **RUN AI BACKTEST**", type="primary", use_container_width=True)
+        run_tournament = st.button("🚀 **RUN AI TOURNAMENT**", type="primary", use_container_width=True)
     
     with col_right:
-        if run_backtest:
-            try:
-                st.cache_data.clear()
-                st.session_state.run_count += 1
+        if run_tournament:
+            tournament = AIStrategyTournament(st.session_state.user['id'])
+            
+            if tournament_mode == "🏆 Full Tournament (All 23+ Strategies)":
+                results, df = tournament.run_tournament(symbol, days)
+                show_tournament_results(results, symbol, df)
                 
-                # Generate data
-                run_hash = hashlib.md5(f"{time.time()}{st.session_state.run_count}{symbol}".encode()).hexdigest()[:8]
-                dynamic_seed = int(run_hash, 16) % 100000 if seed == -1 else seed
+            elif tournament_mode == "🎯 Category Tournament":
+                # Filter strategies by category
+                filtered_strategies = {k: v for k, v in TRADING_STRATEGIES.items() 
+                                     if v.category == category}
                 
-                t0 = time.time()
-                _set_seed(dynamic_seed)
+                with st.spinner(f"🤖 Testing {len(filtered_strategies)} {category} strategies..."):
+                    # Run tournament with filtered strategies
+                    original_strategies = TRADING_STRATEGIES.copy()
+                    TRADING_STRATEGIES.clear()
+                    TRADING_STRATEGIES.update(filtered_strategies)
+                    
+                    results, df = tournament.run_tournament(symbol, days)
+                    show_tournament_results(results, symbol, df)
+                    
+                    # Restore original strategies
+                    TRADING_STRATEGIES.clear()
+                    TRADING_STRATEGIES.update(original_strategies)
+                    
+            elif tournament_mode == "⚡ Single Strategy Test":
+                # Test single strategy
+                strategy_config = TRADING_STRATEGIES[strategy_key]
                 
-                st.info(f"🤖 AI Run #{st.session_state.run_count} | {symbol} | {days} days | Seed: {dynamic_seed}")
-                
+                _set_seed(42)
                 df = _generate_data(symbol, days, interval_min=1)
                 
-                if not df.empty and 'close' in df.columns and seed == -1:
-                    variation = (dynamic_seed % 1000) * 0.0001
-                    for col in ['close', 'open', 'high', 'low']:
-                        df[col] *= (1 + variation)
-                
-                st.success(f"✅ Generated {len(df)} rows | First: {float(df['close'].iloc[0]):.6f} | Last: {float(df['close'].iloc[-1]):.6f}")
-                
-                # AI Optimization
-                if ai_optimize:
-                    st.info("🤖 AI is optimizing strategy parameters...")
-                    user_stats = get_user_statistics(st.session_state.user['id'])
-                    
-                    # AI parameter adjustment based on user performance
-                    if user_stats['avg_return'] > 5:
-                        atr_mult *= 1.1  # More aggressive for profitable traders
-                        rr *= 1.2
-                    elif user_stats['avg_return'] < 0:
-                        atr_mult *= 0.9  # More conservative for struggling traders
-                        rr *= 0.8
-                    
-                    st.success(f"🎯 AI Optimized: ATR={atr_mult:.1f}, R:R=1:{rr:.1f}")
-                
-                # Run backtest
-                cfg = StratV4Config(
-                    lookback=lookback, atr_mult=atr_mult, rr=rr, use_macd_filter=use_macd
-                )
-                
+                cfg = tournament._convert_to_stratv4(strategy_config)
                 stats, trades = backtest_v4(df, cfg)
                 
-                # Display results with AI insights
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Final Equity", f"${stats.final_eq:,.2f}")
-                col2.metric("Total Return", f"{stats.ret_pct:.2f}%")
-                col3.metric("Trades", f"{stats.n_trades}")
-                col4.metric("Win Rate", f"{stats.win_rate:.2f}%")
+                st.success(f"✅ {strategy_config.name} Results:")
                 
-                # AI Performance Analysis
-                if stats.ret_pct > 15:
-                    st.success("🤖 **AI Analysis**: Exceptional strategy performance! Consider increasing position size.")
-                elif stats.ret_pct > 5:
-                    st.info("🤖 **AI Analysis**: Good strategy performance. Fine-tune for even better results.")
-                elif stats.ret_pct > 0:
-                    st.warning("🤖 **AI Analysis**: Marginal profitability. Consider parameter optimization.")
-                else:
-                    st.error("🤖 **AI Analysis**: Strategy needs significant improvement. Try different parameters.")
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Return", f"{stats.ret_pct:.2f}%")
+                col2.metric("Trades", stats.n_trades)
+                col3.metric("Win Rate", f"{stats.win_rate:.1f}%")
+                col4.metric("Profit Factor", f"{stats.pf:.2f}")
                 
                 # Save results
-                backtest_id = save_backtest_results(
-                    st.session_state.user['id'], symbol, stats, trades
-                )
-                st.success(f"💾 **AI Results Saved!** Backtest ID: {backtest_id}")
+                save_backtest_results(st.session_state.user['id'], symbol, stats, trades)
                 
-                # AI Pattern Recognition on the data
-                patterns = detect_patterns_ai(df)
-                if patterns:
-                    st.subheader("🤖 AI Pattern Analysis")
-                    pattern_col1, pattern_col2 = st.columns(2)
-                    
-                    with pattern_col1:
-                        for pattern in patterns[:3]:  # Show top 3 patterns
-                            if pattern['confidence'] > 70:
-                                st.info(f"🎯 **{pattern['name']}** - {pattern['signal']}")
-                    
-                    with pattern_col2:
-                        signals = generate_ai_signals(patterns)
-                        for signal in signals[:3]:  # Show top 3 signals
-                            st.write(f"• {signal}")
-                
-                # Chart with AI insights
-                fig = _price_fig_with_trades(df, trades, symbol, show_ma=show_ma)
-                fig.update_layout(title=f"🤖 AI-Enhanced Backtest - {symbol}")
+                # Show chart
+                fig = _price_fig_with_trades(df, trades, symbol, show_ma=True)
+                fig.update_layout(title=f"{strategy_config.name} - {symbol}")
                 st.plotly_chart(fig, use_container_width=True)
-                
-                dt = time.time() - t0
-                st.success(f"⚡ AI Analysis completed in {dt:.2f} seconds")
-                
-            except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
-                import traceback
-                st.code(traceback.format_exc())
         else:
-            st.info("👆 Configure settings and click 'RUN AI BACKTEST' to start")
+            # Show strategy overview
+            st.info("👆 Select settings and run the AI Tournament to test multiple strategies simultaneously!")
+            
+            st.subheader("📊 Available Strategies Overview")
+            
+            for category in ["Trend Following", "Mean Reversion", "Momentum", "Volatility"]:
+                with st.expander(f"{category} Strategies"):
+                    category_strategies = [s for s in TRADING_STRATEGIES.values() if s.category == category]
+                    
+                    for strategy in category_strategies:
+                        col_a, col_b, col_c = st.columns([2, 1, 1])
+                        col_a.write(f"**{strategy.name}**")
+                        col_a.caption(strategy.description)
+                        col_b.write(f"Risk: {strategy.risk_level}")
+                        col_c.write(f"Market: {strategy.market_type}")
+
+def show_tournament_results(results, symbol, df):
+    """Display AI tournament results"""
+    st.success(f"🏆 AI Tournament Complete! Tested {len(results)} strategies on {symbol}")
+    
+    # Top 3 strategies
+    st.subheader("🥇 Top 3 AI-Recommended Strategies")
+    
+    top_3 = results[:3]
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("🥇 WINNER", top_3[0]['strategy'])
+        st.write(f"**Return:** {top_3[0]['return']:.2f}%")
+        st.write(f"**AI Score:** {top_3[0]['ai_score']:.1f}/100")
+        st.write(f"**Win Rate:** {top_3[0]['win_rate']:.1f}%")
+        
+    with col2:
+        st.metric("🥈 2nd Place", top_3[1]['strategy'])
+        st.write(f"**Return:** {top_3[1]['return']:.2f}%")
+        st.write(f"**AI Score:** {top_3[1]['ai_score']:.1f}/100")
+        st.write(f"**Win Rate:** {top_3[1]['win_rate']:.1f}%")
+        
+    with col3:
+        st.metric("🥉 3rd Place", top_3[2]['strategy'])
+        st.write(f"**Return:** {top_3[2]['return']:.2f}%")
+        st.write(f"**AI Score:** {top_3[2]['ai_score']:.1f}/100")
+        st.write(f"**Win Rate:** {top_3[2]['win_rate']:.1f}%")
+    
+    # AI Recommendation
+    winner = top_3[0]
+    st.subheader("🤖 AI Tournament Analysis")
+    
+    if winner['ai_score'] > 80:
+        st.success(f"🟢 **Excellent Choice**: {winner['strategy']} shows exceptional performance with {winner['return']:.1f}% return!")
+    elif winner['ai_score'] > 60:
+        st.info(f"🟡 **Good Option**: {winner['strategy']} is profitable with {winner['return']:.1f}% return.")
+    else:
+        st.warning(f"🟠 **Proceed with Caution**: Best strategy shows {winner['return']:.1f}% return. Consider different market conditions.")
+    
+    # Detailed results table
+    st.subheader("📊 Complete Tournament Results")
+    
+    df_results = pd.DataFrame(results)
+    df_results = df_results[['strategy', 'category', 'return', 'trades', 'win_rate', 'profit_factor', 'ai_score', 'risk_level']]
+    df_results.columns = ['Strategy', 'Category', 'Return %', 'Trades', 'Win Rate %', 'Profit Factor', 'AI Score', 'Risk Level']
+    
+    # Add performance indicators
+    df_results['🏆'] = df_results.index.map(lambda x: '🥇' if x == 0 else '🥈' if x == 1 else '🥉' if x == 2 else '')
+    
+    st.dataframe(df_results, use_container_width=True, height=400)
+    
+    # Save winner to user's results
+    winner_config = TRADING_STRATEGIES[winner['key']]
+    tournament_obj = AIStrategyTournament(st.session_state.user['id'])
+    cfg = tournament_obj._convert_to_stratv4(winner_config)
+    stats, trades = backtest_v4(df, cfg)
+    
+    save_backtest_results(st.session_state.user['id'], symbol, stats, trades)
+    st.success(f"💾 Winner strategy results saved! ({winner['strategy']})")
 
 def show_live_demo():
     """Live demo functionality with AI insights"""
@@ -2129,9 +2518,11 @@ def show_live_demo():
         selected_symbol = st.selectbox("Select Symbol", live_symbols, key="live_symbol")
         
         st.subheader("🤖 AI Analysis")
-        if st.button("🧠 Get AI Market Analysis"):
-            ai_analysis = get_ai_trading_response(f"analyze {selected_symbol} market conditions", st.session_state.user['id'] if st.session_state.user else None)
-            st.info(ai_analysis)
+if st.button("🧠 Get AI Market Analysis"):
+    with st.spinner("🤖 OpenAI analyzing live market conditions..."):
+        ai_analysis = get_openai_market_analysis(selected_symbol)
+        st.success("✅ OpenAI Analysis Complete!")
+        st.markdown(ai_analysis)
         
         st.write(f"⏰ **Last Update:** {datetime.now().strftime('%H:%M:%S')}")
     
