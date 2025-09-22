@@ -2268,8 +2268,6 @@ def show_tournament_results(results, symbol, df):
 
 def show_live_trading_system():
     """Complete live trading system with AI execution - ULTRA SAFE VERSION"""
-    
-    # Safety check for user session
     if 'user' not in st.session_state or not st.session_state.user:
         st.error("Please login to access live trading.")
         return
@@ -2278,13 +2276,11 @@ def show_live_trading_system():
     st.caption("Live trading with AI-powered strategy execution and detailed explanations")
     
     try:
-        # Get user ID safely
         user_id = st.session_state.user.get('id')
         if not user_id:
             st.error("Invalid user session. Please logout and login again.")
             return
         
-        # Get trading engine safely
         engine = get_trading_engine(user_id)
         if not engine:
             st.error("Unable to initialize trading engine.")
@@ -2292,26 +2288,22 @@ def show_live_trading_system():
             
         status = engine.get_status()
         
-        # Trading Control Panel
+        # ── Trading Control Panel
         st.subheader("⚡ Trading Control Panel")
-        
         col_status, col_controls = st.columns([2, 1])
         
         with col_status:
-            # Display current status
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("💰 Balance", f"${status.get('balance', 0):,.2f}")
             col2.metric("📊 Equity", f"${status.get('equity', 0):,.2f}")
             col3.metric("📈 Positions", status.get('positions', 0))
-            col4.metric("💼 P&L", f"${status.get('total_pnl', 0):,.2f}", 
-                       delta=f"{((status.get('equity', 10000)/10000 - 1) * 100):+.1f}%")
+            col4.metric("💼 P&L", f"${status.get('total_pnl', 0):,.2f}",
+                        delta=f"{((status.get('equity', 10000)/10000 - 1) * 100):+.1f}%")
         
         with col_controls:
-            # Trading controls
             is_running = status.get('is_running', False)
-            
             if not is_running:
-                if st.button("🚀 **START TRADING**", type="primary", use_container_width=True):
+                if st.button("🚀 **START TRADING**", key="live_btn_start", type="primary", use_container_width=True):
                     try:
                         if hasattr(engine, 'start_trading') and engine.start_trading():
                             st.success("✅ AI Trading Engine Started!")
@@ -2321,7 +2313,7 @@ def show_live_trading_system():
                     except Exception as e:
                         st.error(f"Error starting engine: {str(e)}")
             else:
-                if st.button("⏹️ **STOP TRADING**", use_container_width=True):
+                if st.button("⏹️ **STOP TRADING**", key="live_btn_stop", use_container_width=True):
                     try:
                         if hasattr(engine, 'stop_trading') and engine.stop_trading():
                             st.warning("⏹️ AI Trading Engine Stopped!")
@@ -2334,39 +2326,28 @@ def show_live_trading_system():
             trading_status = "🟢 ACTIVE" if is_running else "🔴 STOPPED"
             st.write(f"**Status:** {trading_status}")
         
-        # Strategy Selection & Analysis
+        # ── Strategy Selection & Analysis
         st.subheader("🎯 AI Strategy Analysis & Execution")
-        
         col_left, col_right = st.columns([1, 2])
         
         with col_left:
-            # Market selection
             st.markdown("**📊 Market Selection**")
-            try:
-                market_category = st.selectbox("Market Category", list(ALL_SYMBOLS.keys()), key="live_market")
-                symbol = st.selectbox("Symbol", ALL_SYMBOLS[market_category], key="live_symbol")
-            except Exception as e:
-                st.error(f"Error loading symbols: {str(e)}")
-                return
+            market_category = st.selectbox("Market Category", list(ALL_SYMBOLS.keys()), key="live_market")
+            symbol = st.selectbox("Symbol", ALL_SYMBOLS[market_category], key="live_symbol")
             
             st.markdown("**🤖 AI Analysis**")
-            
-            if st.button("🧠 Analyze & Execute Best Strategy", type="primary", use_container_width=True):
+            if st.button("🧠 Analyze & Execute Best Strategy", key="live_btn_analyze", type="primary", use_container_width=True):
                 with st.spinner("🤖 AI analyzing market and selecting optimal strategy..."):
                     try:
-                        # Run AI tournament to find best strategy
                         tournament = AIStrategyTournament(user_id)
                         results, df = tournament.run_tournament(symbol, days=30)
                         
-                        # Get market context
                         analyzer = MarketContextAnalyzer()
                         market_context = analyzer.analyze_current_market(symbol)
                         
-                        # Get detailed explanation
                         explainer = AIStrategyExplainer()
                         explanation = explainer.explain_strategy(results[0]['strategy'], market_context)
                         
-                        # Store results in session state
                         st.session_state.live_analysis = {
                             'results': results,
                             'symbol': symbol,
@@ -2380,21 +2361,18 @@ def show_live_trading_system():
                     except Exception as e:
                         st.error(f"Error in AI analysis: {str(e)}")
             
-            # Manual controls
             st.markdown("**⚙️ Manual Controls**")
-            if st.button("🔴 Close All Positions", use_container_width=True):
+            if st.button("🔴 Close All Positions", key="live_btn_close_all", use_container_width=True):
                 try:
                     closed_count = 0
                     if hasattr(engine, 'positions') and engine.positions:
-                        positions_to_close = list(engine.positions.keys())
-                        for symbol_pos in positions_to_close:
+                        for pos_key in list(engine.positions.keys()):
                             try:
                                 if hasattr(engine, '_close_position'):
-                                    engine._close_position(symbol_pos, "Manual Close All")
+                                    engine._close_position(pos_key, "Manual Close All")
                                     closed_count += 1
                             except Exception as e:
-                                st.warning(f"Could not close position {symbol_pos}: {str(e)}")
-                    
+                                st.warning(f"Could not close position {pos_key}: {str(e)}")
                     if closed_count > 0:
                         st.success(f"✅ Closed {closed_count} positions!")
                     else:
@@ -2404,54 +2382,42 @@ def show_live_trading_system():
                     st.error(f"Error closing positions: {str(e)}")
         
         with col_right:
-            # Display analysis results
             if 'live_analysis' in st.session_state and st.session_state.live_analysis:
                 try:
                     analysis = st.session_state.live_analysis
-                    
                     st.success(f"🎯 **AI Selected Strategy:** {analysis['results'][0]['strategy']}")
                     
-                    # Strategy performance metrics
                     winner = analysis['results'][0]
                     col_a, col_b, col_c = st.columns(3)
                     col_a.metric("🏆 AI Score", f"{winner['ai_score']:.1f}/100")
                     col_b.metric("📈 Return", f"{winner['return']:.1f}%")
                     col_c.metric("🎯 Win Rate", f"{winner['win_rate']:.1f}%")
                     
-                    # Market context
                     context = analysis['market_context']
                     st.info(f"""
-                    **🌍 Current Market Context:**
-                    • **Trend:** {context.get('trend', 'Unknown').replace('_', ' ').title()}
-                    • **Volatility:** {context.get('volatility', 'Unknown').title()} ({context.get('volatility_value', 0):.2f}%)
-                    • **Risk Sentiment:** {context.get('risk_sentiment', 'Unknown')}
+**🌍 Current Market Context:**
+• **Trend:** {context.get('trend','Unknown').replace('_',' ').title()}
+• **Volatility:** {context.get('volatility','Unknown').title()} ({context.get('volatility_value',0):.2f}%)
+• **Risk Sentiment:** {context.get('risk_sentiment','Unknown')}
                     """)
                     
-                    # Generate trading signal
-                    if st.button("⚡ Generate Trading Signal", use_container_width=True):
+                    if st.button("⚡ Generate Trading Signal", key="live_btn_signal", use_container_width=True):
                         try:
-                            current_price = context.get('current_price', 1.0)
-                            if current_price <= 0:
-                                current_price = 1.0
-                            
-                            # Determine signal based on strategy type
+                            current_price = context.get('current_price', 1.0) or 1.0
                             if winner.get('category', '') in ['Trend Following', 'Momentum']:
-                                action = "BUY" if context.get('trend', '') in ['strong_up', 'weak_up'] else "SELL"
-                            else:  # Mean reversion
-                                action = "BUY" if context.get('current_price', 1.0) < context.get('ma_20', 1.0) else "SELL"
-                            
-                            # Calculate stop loss and take profit safely
-                            volatility_value = max(0.01, context.get('volatility_value', 1.0))  # Ensure minimum volatility
-                            volatility_buffer = current_price * (volatility_value / 100) * 2
-                            
-                            if action == "BUY":
-                                stop_loss = max(0.0001, current_price - volatility_buffer)
-                                take_profit = current_price + (volatility_buffer * 2)
+                                action = "BUY" if context.get('trend','') in ['strong_up', 'weak_up'] else "SELL"
                             else:
-                                stop_loss = current_price + volatility_buffer  
-                                take_profit = max(0.0001, current_price - (volatility_buffer * 2))
+                                action = "BUY" if current_price < context.get('ma_20', current_price) else "SELL"
                             
-                            # Create signal
+                            vol_val = max(0.01, float(context.get('volatility_value', 1.0)))
+                            vol_buf = current_price * (vol_val / 100.0) * 2.0
+                            if action == "BUY":
+                                stop_loss = max(1e-6, current_price - vol_buf)
+                                take_profit = current_price + (2.0 * vol_buf)
+                            else:
+                                stop_loss = current_price + vol_buf
+                                take_profit = max(1e-6, current_price - (2.0 * vol_buf))
+                            
                             signal = TradeSignal(
                                 symbol=analysis['symbol'],
                                 action=action,
@@ -2460,12 +2426,10 @@ def show_live_trading_system():
                                 stop_loss=stop_loss,
                                 take_profit=take_profit,
                                 strategy_name=winner['strategy'],
-                                confidence=winner['ai_score'] / 100,
+                                confidence=winner['ai_score'] / 100.0,
                                 reasoning=f"AI selected best strategy with {winner['ai_score']:.1f}/100 confidence",
                                 timestamp=datetime.now()
                             )
-                            
-                            # Add signal to trading engine
                             if hasattr(engine, 'add_signal'):
                                 engine.add_signal(signal)
                             
@@ -2474,23 +2438,21 @@ def show_live_trading_system():
                             st.write(f"**Stop Loss:** ${stop_loss:.4f}")
                             st.write(f"**Take Profit:** ${take_profit:.4f}")
                             st.write(f"**Confidence:** {winner['ai_score']:.1f}/100")
-                            
                         except Exception as e:
                             st.error(f"Error generating signal: {str(e)}")
-                            
                 except Exception as e:
                     st.error(f"Error displaying analysis: {str(e)}")
             else:
                 st.info("👆 Click 'Analyze & Execute Best Strategy' to get AI-powered trading signals!")
         
-        # Current Positions Display
+        # ── Current Positions
         st.subheader("📊 Current Positions")
         try:
             if hasattr(engine, 'positions') and engine.positions:
-                positions_data = []
+                rows = []
                 for pos_key, pos in engine.positions.items():
                     try:
-                        positions_data.append({
+                        rows.append({
                             'Symbol': getattr(pos, 'symbol', 'N/A'),
                             'Side': 'LONG' if getattr(pos, 'side', 1) == 1 else 'SHORT',
                             'Size': f"{getattr(pos, 'size', 0):.2f}",
@@ -2502,10 +2464,8 @@ def show_live_trading_system():
                         })
                     except Exception as e:
                         st.warning(f"Error processing position: {str(e)}")
-                
-                if positions_data:
-                    df_positions = pd.DataFrame(positions_data)
-                    st.dataframe(df_positions, use_container_width=True)
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True)
                 else:
                     st.info("📊 No positions data available.")
             else:
@@ -2513,7 +2473,7 @@ def show_live_trading_system():
         except Exception as e:
             st.error(f"Error displaying positions: {str(e)}")
         
-        # Trading History
+        # ── Trading History
         st.subheader("📈 Recent Trading Activity")
         try:
             conn = sqlite3.connect('trading_platform.db')
@@ -2525,33 +2485,27 @@ def show_live_trading_system():
                 ORDER BY entry_time DESC 
                 LIMIT 10
             ''', (user_id,))
-            
             trades = cursor.fetchall()
             conn.close()
             
             if trades:
-                trades_data = []
-                for trade in trades:
+                rows = []
+                for t in trades:
                     try:
-                        trades_data.append({
-                            'Symbol': trade[0] or 'N/A',
-                            'Side': 'LONG' if trade[1] == 1 else 'SHORT',
-                            'Size': f"{float(trade[2] or 0):.2f}",
-                            'Price': f"${float(trade[3] or 0):.4f}",
-                            'Strategy': trade[4] or 'N/A',
-                            'Confidence': f"{float(trade[5] or 0)*100:.0f}%",
-                            'Time': trade[6] or 'N/A',
-                            'Status': trade[7] or 'N/A',
-                            'P&L': f"${float(trade[8] or 0):.2f}"
+                        rows.append({
+                            'Symbol': t[0] or 'N/A',
+                            'Side': 'LONG' if t[1] == 1 else 'SHORT',
+                            'Size': f"{float(t[2] or 0):.2f}",
+                            'Price': f"${float(t[3] or 0):.4f}",
+                            'Strategy': t[4] or 'N/A',
+                            'Confidence': f"{float(t[5] or 0)*100:.0f}%",
+                            'Time': t[6] or 'N/A',
+                            'Status': t[7] or 'N/A',
+                            'P&L': f"${float(t[8] or 0):.2f}"
                         })
                     except Exception as e:
-                        st.warning(f"Error processing trade: {str(e)}")
-                
-                if trades_data:
-                    df_trades = pd.DataFrame(trades_data)
-                    st.dataframe(df_trades, use_container_width=True)
-                else:
-                    st.info("📊 No valid trading data.")
+                        st.warning(f"Error processing trade row: {str(e)}")
+                st.dataframe(pd.DataFrame(rows), use_container_width=True)
             else:
                 st.info("📊 No trading history yet. Start the AI trading engine to begin!")
         except Exception as e:
@@ -2559,12 +2513,10 @@ def show_live_trading_system():
     
     except Exception as e:
         st.error(f"Critical error in live trading system: {str(e)}")
-        st.info("Please refresh the page or contact support if the issue persists.")
-        if st.button("🔄 Refresh Page"):
+        if st.button("🔄 Refresh Page", key="live_btn_refresh"):
             st.rerun()
+            
 
-        
-        # Manual controls
 # Manual controls
 st.markdown("**⚙️ Manual Controls**")
 if st.button("🔴 Close All Positions", use_container_width=True):
