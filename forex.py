@@ -1860,7 +1860,19 @@ def get_trading_engine(user_id):
 # ──────────────────────────────────────────────────────────────────────────────
 # MAIN APPLICATION
 # ──────────────────────────────────────────────────────────────────────────────
-
+def ensure_session_defaults():
+    defaults = {
+        "authenticated": False,
+        "user": None,
+        "remember_me": False,
+        "trading_engines": {},
+        "chat_history": [],
+        "run_count": 0,
+        "live_analysis": None,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 def main():
     st.set_page_config(page_title="🤖 AI Trading Platform", layout="wide")
     
