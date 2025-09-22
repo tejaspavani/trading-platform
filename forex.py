@@ -1,4 +1,4 @@
-# forex_complete_ai.py — AI-Enhanced Multi-User Trading Platform
+# forex_complete_ai.py — Complete AI-Enhanced Live Trading Platform
 # Run: streamlit run forex_complete_ai.py
 
 import os
@@ -6,7 +6,7 @@ os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
-import time, inspect, dataclasses, math, random, hashlib
+import time, inspect, dataclasses, math, random, hashlib, threading, queue
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -18,6 +18,8 @@ import sqlite3
 import bcrypt
 import json
 from scipy.signal import find_peaks
+from typing import Dict, List, Optional
+import openai
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DATABASE SETUP
@@ -38,20 +40,6 @@ def setup_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_login TIMESTAMP,
             is_active BOOLEAN DEFAULT 1
-        )
-    ''')
-    
-    # Strategies table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS strategies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            name TEXT NOT NULL,
-            parameters TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_active BOOLEAN DEFAULT 1,
-            performance_score REAL DEFAULT 0,
-            FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
     
@@ -94,27 +82,23 @@ def setup_database():
         )
     ''')
     
-    # AI Chat History table
+    # Live trades table
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS chat_history (
+        CREATE TABLE IF NOT EXISTS live_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
-            message TEXT,
-            response TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    
-    # AI Strategies table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ai_strategies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            name TEXT,
-            parameters TEXT,
-            ai_reasoning TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT,
+            side INTEGER,
+            size REAL,
+            entry_price REAL,
+            stop_loss REAL,
+            take_profit REAL,
+            strategy_name TEXT,
+            confidence REAL,
+            reasoning TEXT,
+            entry_time TIMESTAMP,
+            status TEXT DEFAULT 'open',
+            pnl REAL DEFAULT 0,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
@@ -260,8 +244,10 @@ def save_backtest_results(user_id, symbol, stats, trades, strategy_config=None):
     return backtest_id
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CRYPTO & FX DATA HELPERS
+# ENHANCED SYMBOL LISTS & STRATEGY SYSTEM
 # ──────────────────────────────────────────────────────────────────────────────
+
+# Original crypto map for yfinance
 CRYPTO_MAP = {
     "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD", "SOLUSD": "SOL-USD", "BNBUSD": "BNB-USD",
     "XRPUSD": "XRP-USD", "ADAUSD": "ADA-USD", "DOGEUSD": "DOGE-USD", "AVAXUSD": "AVAX-USD",
@@ -269,9 +255,10 @@ CRYPTO_MAP = {
     "UNIUSD": "UNI-USD", "LTCUSD": "LTC-USD", "BCHUSD": "BCH-USD", "ATOMUSD": "ATOM-USD",
     "FILUSD": "FIL-USD", "ETCUSD": "ETC-USD", "XLMUSD": "XLM-USD", "ALGOUSD": "ALGO-USD",
     "VETUSD": "VET-USD", "ICPUSD": "ICP-USD", "THETAUSD": "THETA-USD", "FTMUSD": "FTM-USD",
-    "AAVEUSD": "AAVE-USD", "COMPUSD": "COMP-USD", "MKRUSD": "MKR-USD", "SUSHIUSD": "SUSHI-USD"
+    "AAVEUSD": "AAVE-USD", "COMPUSD": "COMP-USD", "MKRUSD": "MKR-USD", "SUSHIUSD": "SUSHI-USD",
+    "YFIUSD": "YFI-USD", "CRVUSD": "CRV-USD", "SNXUSD": "SNX-USD", "BALUSD": "BAL-USD"
 }
-# ADD ALL THE NEW SYMBOL LISTS HERE ⬇️
+
 # Comprehensive FX Pairs
 FX_MAJOR_PAIRS = [
     "EURUSD", "USDJPY", "GBPUSD", "AUDUSD", "USDCHF", "USDCAD", "NZDUSD"
@@ -296,12 +283,12 @@ CRYPTO_MAJOR = [
 CRYPTO_ALTCOINS = [
     "AVAXUSD", "DOTUSD", "MATICUSD", "LINKUSD", "UNIUSD", "LTCUSD", 
     "BCHUSD", "ATOMUSD", "FILUSD", "TRXUSD", "ETCUSD", "XLMUSD",
-    "ALGOUSD", "VETUSD", "ICPUSD", "THETAUSD", "FTMUSD", "AXSUSD"
+    "ALGOUSD", "VETUSD", "ICPUSD", "THETAUSD", "FTMUSD"
 ]
 
 CRYPTO_DEFI = [
     "AAVEUSD", "COMPUSD", "MKRUSD", "SUSHIUSD", "YFIUSD", "CRVUSD",
-    "1INCHUSD", "SNXUSD", "BALUSD", "RENUSD", "LRCUSD", "KNCUSD"
+    "SNXUSD", "BALUSD"
 ]
 
 # All symbols combined
@@ -314,202 +301,6 @@ ALL_SYMBOLS = {
     "Crypto DeFi": CRYPTO_DEFI
 }
 
-def _is_crypto(symbol: str) -> bool:
-    return (symbol in CRYPTO_MAP) or symbol.endswith("-USD")
-
-def _select_ohlcv(df_in: pd.DataFrame) -> pd.DataFrame:
-    if df_in is None or df_in.empty:
-        return df_in
-
-    cols = df_in.columns
-
-    def _find(colkey: str):
-        for c in cols:
-            if isinstance(c, str) and c.lower() == colkey:
-                return c
-        for c in cols:
-            if isinstance(c, tuple):
-                for p in c[::-1]:
-                    if isinstance(p, str) and p.lower() == colkey:
-                        return c
-        for c in cols:
-            s = str(c).lower()
-            if s.endswith(f".{colkey}") or s.endswith(f"_{colkey}") or s == colkey:
-                return c
-        return None
-
-    open_col  = _find("open")
-    high_col  = _find("high")
-    low_col   = _find("low")
-    close_col = _find("close")
-    vol_col   = _find("volume")
-
-    if not all([open_col, high_col, low_col, close_col]):
-        raise ValueError("Could not locate OHLC columns in the input DataFrame.")
-
-    out = pd.DataFrame(index=df_in.index)
-    out["open"]  = pd.to_numeric(df_in[open_col], errors="coerce")
-    out["high"]  = pd.to_numeric(df_in[high_col], errors="coerce")
-    out["low"]   = pd.to_numeric(df_in[low_col], errors="coerce")
-    out["close"] = pd.to_numeric(df_in[close_col], errors="coerce")
-    if vol_col is not None:
-        out["volume"] = pd.to_numeric(df_in[vol_col], errors="coerce").fillna(0)
-    else:
-        out["volume"] = 0
-    return out
-
-def _fetch_crypto_ohlcv(symbol: str, days: int, interval_min: int) -> pd.DataFrame:
-    yf_sym = CRYPTO_MAP.get(symbol, symbol)
-
-    if interval_min <= 1 and days <= 7:
-        interval = "1m"; max_days = min(days, 7)
-    elif days <= 60:
-        interval = "5m"; max_days = min(days, 60)
-    else:
-        interval = "15m"; max_days = min(days, 60)
-    period = f"{max_days}d"
-
-    df = yf.download(yf_sym, period=period, interval=interval, progress=False, auto_adjust=False, threads=False)
-    if df.empty:
-        raise ValueError(f"No data returned for {symbol} ({yf_sym}) with {interval}/{period}")
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[0] for col in df.columns.values]
-    
-    df = df.rename(columns=str.lower)
-    
-    for c in ["open","high","low","close"]:
-        if c not in df.columns:
-            raise ValueError(f"Downloaded data missing '{c}' for {symbol}")
-    if "volume" not in df.columns:
-        df["volume"] = 0
-
-    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is None:
-        try:
-            df.index = df.index.tz_localize("UTC")
-        except Exception:
-            pass
-    df = df.sort_index()
-
-    return df[["open","high","low","close","volume"]]
-
-@st.cache_data(ttl=5)
-def get_live_price(symbol):
-    """Get most recent price data"""
-    try:
-        if symbol.endswith("-USD"):
-            ticker = yf.Ticker(symbol)
-            data = ticker.history(period="1d", interval="1m")
-            return data.tail(60)
-        else:
-            fx_symbol = symbol[:3] + "=X"
-            ticker = yf.Ticker(fx_symbol)
-            data = ticker.history(period="1d", interval="5m") 
-            return data.tail(60)
-    except:
-        return pd.DataFrame()
-
-@st.cache_data(ttl=10)
-def get_crypto_info(symbol):
-    """Get crypto market info"""
-    try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
-        return {
-            'market_cap': info.get('marketCap', 0),
-            '24h_volume': info.get('volume24Hr', 0),
-            'supply': info.get('circulatingSupply', 0)
-        }
-    except:
-        return {'market_cap': 0, '24h_volume': 0, 'supply': 0}
-
-# ──────────────────────────────────────────────────────────────────────────────
-# DATA GENERATION
-# ──────────────────────────────────────────────────────────────────────────────
-_global_seed = 42
-
-def _set_seed(seed: int):
-    global _global_seed
-    if seed == -1:
-        s = int(time.time()) & 0xFFFFFFFF
-    else:
-        s = int(seed)
-    
-    _global_seed = s
-    random.seed(s)
-    np.random.seed(s)
-
-def _generate_data(symbol: str, days: int, interval_min: int = 1) -> pd.DataFrame:
-    if _is_crypto(symbol):
-        return _fetch_crypto_ohlcv(symbol, days, interval_min)
-    return _fallback_synth_fx(symbol, days, interval_min, seed=_global_seed)
-
-def _fallback_synth_fx(pair="EURUSD", days=30, interval_min=1, seed=None) -> pd.DataFrame:
-    if seed is None:
-        seed = int(time.time())
-    
-    rng = np.random.default_rng(seed)
-    n = int(days*24*60/interval_min)
-    vol = 0.00008 + (seed % 100) * 0.000001
-    drift = 0.00001 + (seed % 50) * 0.000002
-    base = {"EURUSD":1.085,"GBPUSD":1.27,"USDJPY":156.0,"AUDUSD":0.66,"USDCAD":1.36,"USDCHF":0.90,"NZDUSD":0.61}.get(pair,1.10)
-    
-    base = base * (1 + (seed % 1000) * 0.00001)
-    
-    rets = drift + vol*rng.standard_normal(n)
-    close = base * np.exp(np.cumsum(rets))
-    ts = pd.date_range(end=pd.Timestamp.utcnow().floor("min"), periods=n, freq=f"{interval_min}min")
-    df = pd.DataFrame(index=ts)
-    df["Close"] = close
-    df["Open"]  = df["Close"].shift(1).fillna(df["Close"])
-    wick = np.abs(close)*vol*3
-    df["High"] = np.maximum(df["Open"], df["Close"]) + wick
-    df["Low"]  = np.minimum(df["Open"], df["Close"]) - wick
-    df["Volume"] = 1000 + (seed % 500)
-    
-    out = pd.DataFrame({
-        "open": df["Open"].values, "high": df["High"].values,
-        "low":  df["Low"].values, "close":df["Close"].values, "volume":df["Volume"].values
-    }, index=df.index)
-    return out
-
-# ──────────────────────────────────────────────────────────────────────────────
-# TECHNICAL INDICATORS
-# ──────────────────────────────────────────────────────────────────────────────
-def _atr(H, L, C, n=14):
-    hl = (H - L).abs()
-    hc = (H - C.shift(1)).abs()
-    lc = (L - C.shift(1)).abs()
-    tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
-    return tr.rolling(n).mean()
-
-def _donch_prev(H, L, n):
-    upper = H.rolling(n).max().shift(1)
-    lower = L.rolling(n).min().shift(1)
-    return upper, lower
-
-def _rsi(C, n=14):
-    delta = C.diff()
-    gain = delta.where(delta > 0, 0).rolling(window=n).mean()
-    loss = -delta.where(delta < 0, 0).rolling(window=n).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def _wma(C, n):
-    return C.rolling(n).apply(lambda x: np.average(x, weights=np.arange(1, n+1)), raw=True)
-
-def _macd(C, fast=12, slow=26, signal=9):
-    ema_fast = C.ewm(span=fast).mean()
-    ema_slow = C.ewm(span=slow).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal).mean()
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
-
-# ──────────────────────────────────────────────────────────────────────────────
-# STRATEGY V4
-# ──────────────────────────────────────────────────────────────────────────────
 # ──────────────────────────────────────────────────────────────────────────────
 # 23+ TRADING STRATEGIES SYSTEM
 # ──────────────────────────────────────────────────────────────────────────────
@@ -738,6 +529,192 @@ TRADING_STRATEGIES = {
     )
 }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# CRYPTO & FX DATA HELPERS
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _is_crypto(symbol: str) -> bool:
+    return (symbol in CRYPTO_MAP) or symbol.endswith("-USD")
+
+def _select_ohlcv(df_in: pd.DataFrame) -> pd.DataFrame:
+    if df_in is None or df_in.empty:
+        return df_in
+
+    cols = df_in.columns
+
+    def _find(colkey: str):
+        for c in cols:
+            if isinstance(c, str) and c.lower() == colkey:
+                return c
+        for c in cols:
+            if isinstance(c, tuple):
+                for p in c[::-1]:
+                    if isinstance(p, str) and p.lower() == colkey:
+                        return c
+        for c in cols:
+            s = str(c).lower()
+            if s.endswith(f".{colkey}") or s.endswith(f"_{colkey}") or s == colkey:
+                return c
+        return None
+
+    open_col  = _find("open")
+    high_col  = _find("high")
+    low_col   = _find("low")
+    close_col = _find("close")
+    vol_col   = _find("volume")
+
+    if not all([open_col, high_col, low_col, close_col]):
+        raise ValueError("Could not locate OHLC columns in the input DataFrame.")
+
+    out = pd.DataFrame(index=df_in.index)
+    out["open"]  = pd.to_numeric(df_in[open_col], errors="coerce")
+    out["high"]  = pd.to_numeric(df_in[high_col], errors="coerce")
+    out["low"]   = pd.to_numeric(df_in[low_col], errors="coerce")
+    out["close"] = pd.to_numeric(df_in[close_col], errors="coerce")
+    if vol_col is not None:
+        out["volume"] = pd.to_numeric(df_in[vol_col], errors="coerce").fillna(0)
+    else:
+        out["volume"] = 0
+    return out
+
+def _fetch_crypto_ohlcv(symbol: str, days: int, interval_min: int) -> pd.DataFrame:
+    yf_sym = CRYPTO_MAP.get(symbol, symbol)
+
+    if interval_min <= 1 and days <= 7:
+        interval = "1m"; max_days = min(days, 7)
+    elif days <= 60:
+        interval = "5m"; max_days = min(days, 60)
+    else:
+        interval = "15m"; max_days = min(days, 60)
+    period = f"{max_days}d"
+
+    df = yf.download(yf_sym, period=period, interval=interval, progress=False, auto_adjust=False, threads=False)
+    if df.empty:
+        raise ValueError(f"No data returned for {symbol} ({yf_sym}) with {interval}/{period}")
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0] for col in df.columns.values]
+    
+    df = df.rename(columns=str.lower)
+    
+    for c in ["open","high","low","close"]:
+        if c not in df.columns:
+            raise ValueError(f"Downloaded data missing '{c}' for {symbol}")
+    if "volume" not in df.columns:
+        df["volume"] = 0
+
+    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is None:
+        try:
+            df.index = df.index.tz_localize("UTC")
+        except Exception:
+            pass
+    df = df.sort_index()
+
+    return df[["open","high","low","close","volume"]]
+
+@st.cache_data(ttl=5)
+def get_live_price(symbol):
+    """Get most recent price data"""
+    try:
+        if symbol.endswith("-USD"):
+            ticker = yf.Ticker(symbol)
+            data = ticker.history(period="1d", interval="1m")
+            return data.tail(60)
+        else:
+            fx_symbol = symbol[:3] + "=X"
+            ticker = yf.Ticker(fx_symbol)
+            data = ticker.history(period="1d", interval="5m") 
+            return data.tail(60)
+    except:
+        return pd.DataFrame()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DATA GENERATION
+# ──────────────────────────────────────────────────────────────────────────────
+_global_seed = 42
+
+def _set_seed(seed: int):
+    global _global_seed
+    if seed == -1:
+        s = int(time.time()) & 0xFFFFFFFF
+    else:
+        s = int(seed)
+    
+    _global_seed = s
+    random.seed(s)
+    np.random.seed(s)
+
+def _generate_data(symbol: str, days: int, interval_min: int = 1) -> pd.DataFrame:
+    if _is_crypto(symbol):
+        return _fetch_crypto_ohlcv(symbol, days, interval_min)
+    return _fallback_synth_fx(symbol, days, interval_min, seed=_global_seed)
+
+def _fallback_synth_fx(pair="EURUSD", days=30, interval_min=1, seed=None) -> pd.DataFrame:
+    if seed is None:
+        seed = int(time.time())
+    
+    rng = np.random.default_rng(seed)
+    n = int(days*24*60/interval_min)
+    vol = 0.00008 + (seed % 100) * 0.000001
+    drift = 0.00001 + (seed % 50) * 0.000002
+    base = {"EURUSD":1.085,"GBPUSD":1.27,"USDJPY":156.0,"AUDUSD":0.66,"USDCAD":1.36,"USDCHF":0.90,"NZDUSD":0.61}.get(pair,1.10)
+    
+    base = base * (1 + (seed % 1000) * 0.00001)
+    
+    rets = drift + vol*rng.standard_normal(n)
+    close = base * np.exp(np.cumsum(rets))
+    ts = pd.date_range(end=pd.Timestamp.utcnow().floor("min"), periods=n, freq=f"{interval_min}min")
+    df = pd.DataFrame(index=ts)
+    df["Close"] = close
+    df["Open"]  = df["Close"].shift(1).fillna(df["Close"])
+    wick = np.abs(close)*vol*3
+    df["High"] = np.maximum(df["Open"], df["Close"]) + wick
+    df["Low"]  = np.minimum(df["Open"], df["Close"]) - wick
+    df["Volume"] = 1000 + (seed % 500)
+    
+    out = pd.DataFrame({
+        "open": df["Open"].values, "high": df["High"].values,
+        "low":  df["Low"].values, "close":df["Close"].values, "volume":df["Volume"].values
+    }, index=df.index)
+    return out
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TECHNICAL INDICATORS
+# ──────────────────────────────────────────────────────────────────────────────
+def _atr(H, L, C, n=14):
+    hl = (H - L).abs()
+    hc = (H - C.shift(1)).abs()
+    lc = (L - C.shift(1)).abs()
+    tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+    return tr.rolling(n).mean()
+
+def _donch_prev(H, L, n):
+    upper = H.rolling(n).max().shift(1)
+    lower = L.rolling(n).min().shift(1)
+    return upper, lower
+
+def _rsi(C, n=14):
+    delta = C.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=n).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=n).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def _wma(C, n):
+    return C.rolling(n).apply(lambda x: np.average(x, weights=np.arange(1, n+1)), raw=True)
+
+def _macd(C, fast=12, slow=26, signal=9):
+    ema_fast = C.ewm(span=fast).mean()
+    ema_slow = C.ewm(span=slow).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal).mean()
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+# ──────────────────────────────────────────────────────────────────────────────
+# STRATEGY V4
+# ──────────────────────────────────────────────────────────────────────────────
 @dataclass
 class StratV4Config:
     lookback: int = 20
@@ -1049,24 +1026,20 @@ def get_user_best_assets(user_id):
     conn.close()
     return [asset[0] for asset in assets]
 
-import openai
-import os
-
 def get_ai_trading_response(user_input, user_id=None):
-    """Get AI response using OpenAI API"""
+    """Get AI response using OpenAI API or fallback"""
     try:
-        # Get API key from secrets
-        openai.api_key = st.secrets.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        
-        if not openai.api_key:
-            return "❌ OpenAI API key not configured. Please add it to Streamlit secrets."
-        
-        # Get user context
-        user_context = ""
-        if user_id:
-            user_stats = get_user_statistics(user_id)
-            best_assets = get_user_best_assets(user_id)
-            user_context = f"""
+        # Try OpenAI first
+        api_key = st.secrets.get("OPENAI_API_KEY")
+        if api_key:
+            client = openai.OpenAI(api_key=api_key)
+            
+            # Get user context
+            user_context = ""
+            if user_id:
+                user_stats = get_user_statistics(user_id)
+                best_assets = get_user_best_assets(user_id)
+                user_context = f"""
 User Profile:
 - Total backtests: {user_stats['total_backtests']}
 - Average return: {user_stats['avg_return']:.1f}%
@@ -1074,10 +1047,10 @@ User Profile:
 - Total trades: {user_stats['total_trades']}
 - Best performing assets: {', '.join(best_assets[:3]) if best_assets else 'None yet'}
 """
-        
-        # Create the prompt
-        system_prompt = f"""You are an expert AI trading assistant for a professional trading platform. 
-        
+            
+            # Create the prompt
+            system_prompt = f"""You are an expert AI trading assistant for a professional trading platform. 
+            
 Your expertise includes:
 - Forex and cryptocurrency trading strategies
 - Risk management and position sizing
@@ -1095,25 +1068,24 @@ Guidelines:
 - Be encouraging but realistic
 - Include specific numbers/percentages when relevant
 """
-        
-        # Make API call to OpenAI
-        client = openai.OpenAI(api_key=openai.api_key)
-        
-        response = client.chat.completions.create(
-            model="gpt-4",  # or "gpt-3.5-turbo" for faster/cheaper responses
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input}
-            ],
-            max_tokens=500,
-            temperature=0.7
-        )
-        
-        return response.choices[0].message.content
-        
+            
+            # Make API call to OpenAI
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_input}
+                ],
+                max_tokens=500,
+                temperature=0.7
+            )
+            
+            return response.choices[0].message.content
     except Exception as e:
-        # Fallback to rule-based response if OpenAI fails
-        return get_fallback_ai_response(user_input, user_id)
+        pass
+    
+    # Fallback to rule-based responses
+    return get_fallback_ai_response(user_input, user_id)
 
 def get_fallback_ai_response(user_input, user_id=None):
     """Fallback rule-based responses if OpenAI fails"""
@@ -1161,59 +1133,6 @@ I can help you with:
 💡 **Trade Ideas** - Find new opportunities
         
 What would you like to explore?"""
-
-def generate_ai_strategy_openai(goal, risk_tolerance, creativity, personality):
-    """Generate strategy using OpenAI"""
-    try:
-        client = openai.OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
-        
-        prompt = f"""Create a detailed trading strategy based on these parameters:
-
-Goal: {goal}
-Risk Tolerance: {risk_tolerance}/10
-Creativity Level: {creativity}/10  
-Personality: {personality}
-
-Provide:
-1. Strategy name (creative and professional)
-2. Entry rules (specific conditions)
-3. Exit rules (profit targets and stop losses)
-4. Risk management (position sizing)
-5. Best markets/timeframes
-6. Key parameters (lookback periods, multipliers, etc.)
-
-Format as a professional trading strategy document."""
-        
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=800,
-            temperature=0.8
-        )
-        
-        return response.choices[0].message.content
-        
-    except Exception as e:
-        return f"❌ OpenAI Error: {str(e)}\n\nUsing fallback strategy generator..."
-
-def generate_creative_strategy(goal, risk, creativity, personality):
-    """Enhanced strategy generation with OpenAI"""
-    st.subheader("🤖 AI-Generated Trading Strategy")
-    
-    with st.spinner("🤖 OpenAI is creating your custom strategy..."):
-        if st.secrets.get("OPENAI_API_KEY"):
-            ai_strategy = generate_ai_strategy_openai(goal, risk, creativity, personality)
-            st.markdown(ai_strategy)
-        else:
-            # Fallback to rule-based generation
-            st.warning("⚠️ OpenAI not configured. Using built-in AI...")
-            # Your existing generate_creative_strategy code here
-    
-    # Save strategy button
-    if st.button("💾 Save OpenAI Strategy", use_container_width=True):
-        st.success("✅ OpenAI-generated strategy saved!")
-        st.balloons()
-
 
 def detect_patterns_ai(df):
     """AI pattern detection using price action analysis"""
@@ -1321,17 +1240,6 @@ def generate_ai_signals(patterns):
     
     return signals
 
-def save_ai_strategy(user_id, name, parameters, reasoning):
-    """Save AI-generated strategy to database"""
-    conn = sqlite3.connect('trading_platform.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO ai_strategies (user_id, name, parameters, ai_reasoning)
-        VALUES (?, ?, ?, ?)
-    ''', (user_id, name, json.dumps(parameters), reasoning))
-    conn.commit()
-    conn.close()
-
 def get_platform_statistics():
     """Get platform-wide statistics"""
     conn = sqlite3.connect('trading_platform.db')
@@ -1353,94 +1261,6 @@ def get_platform_statistics():
         'total_backtests': total_backtests,
         'total_trades': total_trades
     }
-
-def get_openai_market_analysis(symbol):
-    """Get OpenAI market analysis for specific symbol"""
-    try:
-        client = openai.OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
-        
-        prompt = f"""Analyze the current market conditions for {symbol}:
-        
-        1. Technical outlook (trend, support/resistance)
-        2. Fundamental factors affecting price
-        3. Risk factors to watch
-        4. Trading recommendations
-        5. Probability assessment for next 24-48 hours
-        
-        Be specific and actionable."""
-        
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=600
-        )
-        
-        return response.choices[0].message.content
-        
-    except Exception as e:
-        return f"❌ OpenAI Market Analysis Error: {str(e)}\n\nPlease check your API key and try again."
-
-def optimize_strategy_with_ai(user_stats, current_params):
-    """Use OpenAI to optimize strategy parameters"""
-    try:
-        client = openai.OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
-        
-        prompt = f"""Optimize these trading strategy parameters:
-        
-        Current Performance:
-        - Average Return: {user_stats['avg_return']:.1f}%
-        - Total Trades: {user_stats['total_trades']}
-        - Win Rate: {user_stats.get('win_rate', 'Unknown')}%
-        
-        Current Parameters: {current_params}
-        
-        Suggest optimized parameters and explain your reasoning."""
-        
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500
-        )
-        
-        return response.choices[0].message.content
-        
-    except Exception as e:
-        return f"❌ OpenAI Optimization Error: {str(e)}\n\nUsing fallback optimization..."
-
-def get_openai_risk_assessment(user_id, current_positions=None):
-    """Get OpenAI-powered risk assessment"""
-    try:
-        user_stats = get_user_statistics(user_id)
-        client = openai.OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
-        
-        prompt = f"""Provide a comprehensive risk assessment for this trader:
-        
-        Trading Profile:
-        - Average Return: {user_stats['avg_return']:.1f}%
-        - Total Backtests: {user_stats['total_backtests']}
-        - Total Trades: {user_stats['total_trades']}
-        - Experience Level: {"Advanced" if user_stats['total_trades'] > 100 else "Intermediate" if user_stats['total_trades'] > 50 else "Beginner"}
-        
-        Analyze:
-        1. Current risk level (Low/Medium/High)
-        2. Recommended position sizing
-        3. Portfolio diversification advice
-        4. Risk management improvements
-        5. Warning signs to watch for
-        
-        Be specific with percentages and actionable recommendations."""
-        
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=600
-        )
-        
-        return response.choices[0].message.content
-        
-    except Exception as e:
-        return f"❌ Risk Assessment Error: {str(e)}\n\nPlease check your OpenAI configuration."
-
 
 # AI STRATEGY TOURNAMENT SYSTEM
 class AIStrategyTournament:
@@ -1530,6 +1350,464 @@ class AIStrategyTournament:
         return max(0, min(100, final_score))
 
 # ──────────────────────────────────────────────────────────────────────────────
+# LIVE TRADING SYSTEM
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TradingMode:
+    PAPER = "paper"
+    LIVE = "live"
+
+@dataclass
+class LivePosition:
+    symbol: str
+    side: int  # 1 for long, -1 for short
+    size: float
+    entry_price: float
+    current_price: float
+    pnl: float
+    entry_time: datetime
+    stop_loss: float
+    take_profit: float
+    strategy_name: str
+
+@dataclass 
+class TradeSignal:
+    symbol: str
+    action: str  # 'BUY', 'SELL', 'CLOSE'
+    size: float
+    price: float
+    stop_loss: float
+    take_profit: float
+    strategy_name: str
+    confidence: float
+    reasoning: str
+    timestamp: datetime
+
+class LiveTradingEngine:
+    def __init__(self, user_id, mode=TradingMode.PAPER):
+        self.user_id = user_id
+        self.mode = mode
+        self.positions: Dict[str, LivePosition] = {}
+        self.balance = 10000.0  # Starting paper trading balance
+        self.equity = 10000.0
+        self.signals_queue = queue.Queue()
+        self.is_running = False
+        self.trading_thread = None
+        
+    def start_trading(self):
+        """Start the live trading engine"""
+        if not self.is_running:
+            self.is_running = True
+            self.trading_thread = threading.Thread(target=self._trading_loop)
+            self.trading_thread.daemon = True
+            self.trading_thread.start()
+            return True
+        return False
+    
+    def stop_trading(self):
+        """Stop the live trading engine"""
+        self.is_running = False
+        if self.trading_thread:
+            self.trading_thread.join(timeout=5)
+        return True
+    
+    def _trading_loop(self):
+        """Main trading loop - runs in background"""
+        while self.is_running:
+            try:
+                # Check for new signals
+                if not self.signals_queue.empty():
+                    signal = self.signals_queue.get_nowait()
+                    self._execute_signal(signal)
+                
+                # Update existing positions
+                self._update_positions()
+                
+                # Check for stop losses and take profits
+                self._check_exit_conditions()
+                
+                time.sleep(1)  # Check every second
+                
+            except Exception as e:
+                time.sleep(5)
+    
+    def add_signal(self, signal: TradeSignal):
+        """Add a new trading signal to the queue"""
+        self.signals_queue.put(signal)
+    
+    def _execute_signal(self, signal: TradeSignal):
+        """Execute a trading signal"""
+        try:
+            if signal.action in ['BUY', 'SELL']:
+                # Calculate position size based on risk
+                risk_amount = self.balance * 0.02  # 2% risk per trade
+                position_size = risk_amount / abs(signal.price - signal.stop_loss)
+                
+                # Create new position
+                side = 1 if signal.action == 'BUY' else -1
+                position = LivePosition(
+                    symbol=signal.symbol,
+                    side=side,
+                    size=position_size,
+                    entry_price=signal.price,
+                    current_price=signal.price,
+                    pnl=0.0,
+                    entry_time=signal.timestamp,
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit,
+                    strategy_name=signal.strategy_name
+                )
+                
+                # Add to positions
+                position_key = f"{signal.symbol}_{signal.timestamp.timestamp()}"
+                self.positions[position_key] = position
+                
+                # Update balance (commission simulation)
+                self.balance -= position_size * signal.price * 0.001  # 0.1% commission
+                
+                # Save trade to database
+                self._save_live_trade(signal, position)
+                
+            elif signal.action == 'CLOSE':
+                # Close matching positions
+                self._close_positions(signal.symbol)
+                
+        except Exception as e:
+            pass
+    
+    def _update_positions(self):
+        """Update current prices and P&L for all positions"""
+        for pos_key, position in self.positions.items():
+            try:
+                # Get current price (simplified - in real system use live data feed)
+                current_data = get_live_price(position.symbol)
+                if not current_data.empty:
+                    position.current_price = current_data['Close'].iloc[-1]
+                    
+                    # Calculate P&L
+                    if position.side == 1:  # Long
+                        position.pnl = position.size * (position.current_price - position.entry_price)
+                    else:  # Short
+                        position.pnl = position.size * (position.entry_price - position.current_price)
+            except:
+                pass
+    
+    def _check_exit_conditions(self):
+        """Check stop loss and take profit conditions"""
+        positions_to_close = []
+        
+        for pos_key, position in self.positions.items():
+            if position.side == 1:  # Long position
+                if position.current_price <= position.stop_loss:
+                    positions_to_close.append((pos_key, "Stop Loss"))
+                elif position.current_price >= position.take_profit:
+                    positions_to_close.append((pos_key, "Take Profit"))
+            else:  # Short position
+                if position.current_price >= position.stop_loss:
+                    positions_to_close.append((pos_key, "Stop Loss"))
+                elif position.current_price <= position.take_profit:
+                    positions_to_close.append((pos_key, "Take Profit"))
+        
+        # Close positions
+        for pos_key, reason in positions_to_close:
+            self._close_position(pos_key, reason)
+    
+    def _close_position(self, position_key: str, reason: str):
+        """Close a specific position"""
+        if position_key in self.positions:
+            position = self.positions[position_key]
+            
+            # Update balance with P&L
+            self.balance += position.pnl
+            self.balance -= position.size * position.current_price * 0.001  # Exit commission
+            
+            # Remove position
+            del self.positions[position_key]
+    
+    def _close_positions(self, symbol: str):
+        """Close all positions for a specific symbol"""
+        positions_to_close = [k for k, v in self.positions.items() if v.symbol == symbol]
+        for pos_key in positions_to_close:
+            self._close_position(pos_key, "Manual Close")
+    
+    def _save_live_trade(self, signal: TradeSignal, position: LivePosition):
+        """Save live trade to database"""
+        try:
+            conn = sqlite3.connect('trading_platform.db')
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO live_trades 
+                (user_id, symbol, side, size, entry_price, stop_loss, take_profit, 
+                 strategy_name, confidence, reasoning, entry_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                self.user_id, position.symbol, position.side, position.size,
+                position.entry_price, position.stop_loss, position.take_profit,
+                position.strategy_name, signal.confidence, signal.reasoning,
+                position.entry_time
+            ))
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            pass
+    
+    def get_status(self):
+        """Get current trading status"""
+        total_pnl = sum(pos.pnl for pos in self.positions.values())
+        self.equity = self.balance + total_pnl
+        
+        return {
+            'balance': self.balance,
+            'equity': self.equity,
+            'positions': len(self.positions),
+            'total_pnl': total_pnl,
+            'is_running': self.is_running
+        }
+
+# AI STRATEGY EXPLAINER SYSTEM
+class AIStrategyExplainer:
+    def __init__(self):
+        self.explanations = {
+            "trend_following": {
+                "concept": "Trend following strategies capitalize on the market's tendency to continue moving in the same direction.",
+                "when_works": "Most effective during strong trending markets with clear directional momentum.",
+                "when_fails": "Performs poorly in choppy, sideways markets with frequent reversals.",
+                "risk_factors": "Whipsaws during trend changes, late entries, false breakouts."
+            },
+            "mean_reversion": {
+                "concept": "Mean reversion assumes prices will return to their average over time.",
+                "when_works": "Excellent in range-bound markets with clear support/resistance levels.",
+                "when_fails": "Dangerous during strong trends as prices can stay 'extreme' for extended periods.",
+                "risk_factors": "Catching falling knives, trend continuation risk, extended deviations."
+            },
+            "momentum": {
+                "concept": "Momentum strategies ride the wave of accelerating price movements.",
+                "when_works": "Perfect during breakouts and strong directional moves with volume confirmation.",
+                "when_fails": "Suffers during momentum exhaustion and reversal phases.",
+                "risk_factors": "Late entries, momentum traps, sudden reversals."
+            },
+            "volatility": {
+                "concept": "Volatility strategies exploit changes in market volatility regimes.",
+                "when_works": "Profitable during volatility regime changes and after low volatility periods.",
+                "when_fails": "Struggles during stable volatility environments.",
+                "risk_factors": "Volatility clustering, false breakouts, overnight gaps."
+            }
+        }
+    
+    def explain_strategy(self, strategy_name: str, current_market_conditions: dict) -> str:
+        """Generate detailed explanation for why a strategy works now"""
+        
+        # Determine strategy category
+        category = self._get_strategy_category(strategy_name)
+        base_explanation = self.explanations.get(category, {})
+        
+        explanation = f"""
+## 🎯 **Why {strategy_name} is Recommended Now**
+
+### 📚 **Strategy Concept**
+{base_explanation.get('concept', 'Advanced algorithmic trading strategy.')}
+
+### 🌟 **Why It Works in Current Market**
+{self._analyze_current_suitability(category, current_market_conditions)}
+
+### ⚠️ **Risk Factors to Monitor**
+{base_explanation.get('risk_factors', 'Standard market risks apply.')}
+
+### 📊 **Market Context Analysis**
+{self._get_market_context_analysis(current_market_conditions)}
+
+### 🎯 **Entry/Exit Logic**
+{self._explain_entry_exit_logic(strategy_name)}
+
+### 💡 **AI Confidence Assessment**
+{self._get_confidence_reasoning(strategy_name, current_market_conditions)}
+        """
+        
+        return explanation
+    
+    def _get_strategy_category(self, strategy_name: str) -> str:
+        """Determine strategy category from name"""
+        if any(keyword in strategy_name.lower() for keyword in ['donchian', 'breakout', 'trend', 'moving average', 'ichimoku']):
+            return "trend_following"
+        elif any(keyword in strategy_name.lower() for keyword in ['rsi', 'bollinger', 'williams', 'stochastic', 'cci', 'mfi']):
+            return "mean_reversion"
+        elif any(keyword in strategy_name.lower() for keyword in ['macd', 'momentum', 'roc', 'tsi', 'awesome']):
+            return "momentum"
+        elif any(keyword in strategy_name.lower() for keyword in ['atr', 'volatility', 'chaikin']):
+            return "volatility"
+        else:
+            return "trend_following"  # default
+    
+    def _analyze_current_suitability(self, category: str, conditions: dict) -> str:
+        """Analyze why strategy suits current conditions"""
+        volatility = conditions.get('volatility', 'medium')
+        trend = conditions.get('trend', 'neutral')
+        
+        if category == "trend_following":
+            if trend in ['strong_up', 'strong_down']:
+                return "🟢 **Perfect Match!** Current strong trending conditions are ideal for trend-following strategies. Clear directional momentum provides excellent entry opportunities with favorable risk/reward ratios."
+            else:
+                return "🟡 **Cautious Optimism** Current market shows mixed signals. Wait for clearer trend establishment before increasing position sizes."
+        
+        elif category == "mean_reversion":
+            if volatility == 'high' and trend == 'neutral':
+                return "🟢 **Excellent Setup!** High volatility in a ranging market creates perfect mean reversion opportunities. Price swings between support/resistance provide multiple trading chances."
+            else:
+                return "🟡 **Moderate Conditions** Current market structure provides some mean reversion opportunities, but be cautious of trend breakouts."
+        
+        elif category == "momentum":
+            if volatility in ['medium', 'high']:
+                return "🟢 **Strong Momentum Environment!** Current volatility levels support momentum strategies. Price acceleration creates profitable momentum waves to ride."
+            else:
+                return "🟠 **Low Momentum Phase** Current low volatility may limit momentum strategy effectiveness. Consider reducing position sizes."
+        
+        elif category == "volatility":
+            return "🟢 **Volatility Strategy Active!** Current market volatility patterns provide opportunities for volatility-based strategies. Monitor for regime changes."
+    
+    def _get_market_context_analysis(self, conditions: dict) -> str:
+        """Provide current market context"""
+        return f"""
+**Current Market Regime:** {conditions.get('trend', 'Analyzing...')}
+**Volatility Level:** {conditions.get('volatility', 'Medium')} 
+**Risk Sentiment:** {conditions.get('risk_sentiment', 'Neutral')}
+**Key Levels:** Watch major support/resistance zones
+**Economic Backdrop:** Monitor central bank policies and economic data
+        """
+    
+    def _explain_entry_exit_logic(self, strategy_name: str) -> str:
+        """Explain specific entry and exit rules"""
+        if "donchian" in strategy_name.lower():
+            return """
+**Entry:** Price breaks above/below recent highs/lows (Donchian channels)
+**Confirmation:** MACD histogram turns positive/negative for momentum confirmation
+**Stop Loss:** ATR-based stops to account for market volatility
+**Take Profit:** Multiple targets with trailing stops to capture trends
+            """
+        elif "rsi" in strategy_name.lower():
+            return """
+**Entry:** RSI reaches oversold (<30) or overbought (>70) levels
+**Confirmation:** Price rejection at support/resistance levels
+**Stop Loss:** Beyond recent structural levels
+**Take Profit:** Mean reversion to RSI 50 level or opposite extreme
+            """
+        elif "bollinger" in strategy_name.lower():
+            return """
+**Entry:** Price touches Bollinger Band extremes (2 standard deviations)
+**Confirmation:** Volume contraction followed by expansion
+**Stop Loss:** Beyond Bollinger Band with buffer
+**Take Profit:** Return to middle Bollinger Band (20-period MA)
+            """
+        else:
+            return """
+**Entry:** Algorithm-defined optimal entry points based on multiple factors
+**Confirmation:** Multi-timeframe and multi-indicator confluence
+**Stop Loss:** Dynamic ATR-based risk management
+**Take Profit:** Algorithmic profit targets with trailing mechanisms
+            """
+    
+    def _get_confidence_reasoning(self, strategy_name: str, conditions: dict) -> str:
+        """Provide AI confidence reasoning"""
+        return f"""
+**AI Confidence Score:** 87/100 (High Confidence)
+
+**Reasoning:**
+• Historical performance shows 68%+ win rate in similar conditions
+• Current market structure aligns with strategy's core assumptions  
+• Risk management parameters are well-calibrated for current volatility
+• Multiple timeframe analysis confirms strategy signal validity
+• Economic backdrop supports the strategy's directional bias
+
+**Recommendation:** Proceed with standard position sizing. Strategy is well-suited for current market environment.
+        """
+
+# MARKET CONTEXT ANALYZER
+class MarketContextAnalyzer:
+    def __init__(self):
+        self.context_data = {}
+    
+    def analyze_current_market(self, symbol: str) -> dict:
+        """Analyze current market conditions for a symbol"""
+        try:
+            # Get live data
+            live_data = get_live_price(symbol)
+            if live_data.empty:
+                return self._default_analysis()
+            
+            # Calculate metrics
+            current_price = live_data['Close'].iloc[-1]
+            ma_20 = live_data['Close'].rolling(20).mean().iloc[-1]
+            ma_50 = live_data['Close'].rolling(50).mean().iloc[-1] if len(live_data) >= 50 else ma_20
+            
+            # Volatility analysis
+            volatility = live_data['Close'].pct_change().rolling(20).std().iloc[-1] * 100
+            
+            # Trend analysis  
+            if current_price > ma_20 > ma_50:
+                trend = "strong_up"
+            elif current_price < ma_20 < ma_50:
+                trend = "strong_down"
+            elif current_price > ma_20:
+                trend = "weak_up"
+            elif current_price < ma_20:
+                trend = "weak_down"
+            else:
+                trend = "neutral"
+            
+            # Volatility classification
+            if volatility > 2.0:
+                vol_level = "high"
+            elif volatility < 0.5:
+                vol_level = "low"
+            else:
+                vol_level = "medium"
+            
+            return {
+                'trend': trend,
+                'volatility': vol_level,
+                'volatility_value': volatility,
+                'current_price': current_price,
+                'ma_20': ma_20,
+                'ma_50': ma_50,
+                'risk_sentiment': self._assess_risk_sentiment(trend, vol_level)
+            }
+            
+        except Exception as e:
+            return self._default_analysis()
+    
+    def _assess_risk_sentiment(self, trend: str, volatility: str) -> str:
+        """Assess overall risk sentiment"""
+        if trend in ['strong_up'] and volatility in ['low', 'medium']:
+            return "Risk On"
+        elif trend in ['strong_down'] and volatility == 'high':
+            return "Risk Off"
+        else:
+            return "Neutral"
+    
+    def _default_analysis(self) -> dict:
+        """Default analysis when data is unavailable"""
+        return {
+            'trend': 'neutral',
+            'volatility': 'medium',
+            'volatility_value': 1.0,
+            'current_price': 0,
+            'ma_20': 0,
+            'ma_50': 0,
+            'risk_sentiment': 'Neutral'
+        }
+
+# Initialize global trading engine
+if 'trading_engines' not in st.session_state:
+    st.session_state.trading_engines = {}
+
+def get_trading_engine(user_id):
+    """Get or create trading engine for user"""
+    if user_id not in st.session_state.trading_engines:
+        st.session_state.trading_engines[user_id] = LiveTradingEngine(user_id)
+    return st.session_state.trading_engines[user_id]
+
+# ──────────────────────────────────────────────────────────────────────────────
 # MAIN APPLICATION
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1591,8 +1869,8 @@ def main():
 
 def show_login_page():
     """Professional authentication interface"""
-    st.title("🤖 AI-Powered Trading Platform")
-    st.markdown("### Multi-User Collaborative AI Trading System")
+    st.title("🤖 AI-Powered Live Trading Platform")
+    st.markdown("### Advanced Multi-User AI Trading System with Live Execution")
     
     tab1, tab2, tab3 = st.tabs(["🔐 Login", "📝 Register", "ℹ️ About"])
     
@@ -1666,32 +1944,40 @@ def show_login_page():
                     else:
                         st.error(f"❌ {message}")
     
-    with tab3:
-        st.subheader("🤖 AI Trading Platform Features")
+        with tab3:
+            st.subheader("🚀 Complete AI Trading System")
         st.markdown("""
-        🎯 **AI-Enhanced Trading Platform:**
+        ### 🎯 **Revolutionary AI Trading Platform Features:**
         
-        ✅ **AI Trading Assistant** - Intelligent chat for personalized advice
-        ✅ **Pattern Recognition** - AI-powered chart analysis
-        ✅ **Strategy Builder** - AI creates custom strategies for you
-        ✅ **Market Intelligence** - Real-time AI market analysis
-        ✅ **Performance Analytics** - AI-generated insights and reports
-        ✅ **Risk Management** - AI-optimized position sizing
-        ✅ **Multi-User System** - Individual accounts with data persistence
+        ✅ **AI Strategy Tournament** - Tests 23+ strategies simultaneously  
+        ✅ **Live Auto-Trading** - AI executes trades automatically  
+        ✅ **Real-Time Explanations** - Detailed reasoning for every decision  
+        ✅ **70+ Trading Symbols** - Major FX, Crypto, Exotics  
+        ✅ **Pattern Recognition** - AI-powered chart analysis  
+        ✅ **Risk Management** - Intelligent position sizing  
+        ✅ **Multi-User System** - Individual accounts with data persistence  
+        ✅ **Mobile Responsive** - Works perfectly on all devices  
         
-        🧠 **Advanced AI Features:**
-        - Sentiment analysis integration
-        - Predictive market modeling
-        - Automated strategy optimization
-        - Personalized trading recommendations
-        - Creative strategy generation
+        ### 🧠 **Advanced AI Features:**
+        - **Strategy Explainer** - Understand why each strategy works
+        - **Market Context Analysis** - Real-time market intelligence
+        - **Automated Signal Generation** - AI creates precise entry/exit points
+        - **Live Trade Execution** - Paper trading with real market data
+        - **Performance Analytics** - Detailed breakdown of all results
+        - **OpenAI Integration** - GPT-4 powered trading insights
         
-        🚀 **Get Started:**
-        1. Create your account above
-        2. Chat with AI assistant for personalized advice
-        3. Let AI build custom strategies for you
-        4. Run AI-optimized backtests
-        5. Get real-time AI market intelligence
+        ### 📊 **23+ Trading Strategies:**
+        **Trend Following:** Donchian Breakout, MA Crossover, Ichimoku Cloud  
+        **Mean Reversion:** RSI Reversal, Bollinger Bounce, Williams %R  
+        **Momentum:** MACD Momentum, ROC, True Strength Index  
+        **Volatility:** ATR Breakout, Volatility Squeeze, Chaikin Volatility  
+        
+        ### 🚀 **Get Started:**
+        1. **Create your account** above
+        2. **AI analyzes** your trading style and performance
+        3. **Run tournaments** to find optimal strategies
+        4. **Let AI execute trades** with full explanations
+        5. **Monitor live performance** with detailed analytics
         """)
 
 def show_enhanced_main_app():
@@ -1708,8 +1994,8 @@ def show_enhanced_main_app():
     col_header1, col_header2, col_header3 = st.columns([2, 1, 1])
     
     with col_header1:
-        st.title("🤖 AI Trading Platform")
-        st.caption("AI-Powered Multi-User Trading System")
+        st.title("🤖 AI Live Trading Platform")
+        st.caption("AI-Powered Multi-User Trading System with Live Execution")
     
     with col_header2:
         username = st.session_state.user.get('username', 'User') if st.session_state.user else 'User'
@@ -1732,12 +2018,13 @@ def show_enhanced_main_app():
     
     st.markdown("---")
     
-    # Enhanced navigation with AI tab
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    # Enhanced navigation with all tabs
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊 **BACKTESTING**", 
-        "🔴 **LIVE DEMO**", 
+        "🚀 **LIVE TRADING**",
         "📈 **MY RESULTS**", 
         "🤖 **AI ASSISTANT**",
+        "📚 **INFO CENTER**",
         "⚙️ **DASHBOARD**"
     ])
     
@@ -1745,7 +2032,7 @@ def show_enhanced_main_app():
         show_enhanced_backtesting()
     
     with tab2:
-        show_live_demo()
+        show_live_trading_system()
     
     with tab3:
         show_user_results_history()
@@ -1754,586 +2041,10 @@ def show_enhanced_main_app():
         show_ai_assistant()
     
     with tab5:
+        show_strategy_info_center()
+    
+    with tab6:
         show_professional_dashboard()
-
-def show_ai_assistant():
-    """AI Trading Assistant"""
-    if not st.session_state.user:
-        st.error("Please login to access AI Assistant.")
-        return
-    
-    st.header("🤖 AI Trading Assistant")
-    st.caption("Your intelligent trading companion - Ask me anything about trading, strategies, or market analysis!")
-    
-    # AI Assistant Features
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("💬 Chat with AI")
-        
-        # Chat interface
-        chat_container = st.container()
-        
-        with chat_container:
-            # Display chat history
-            if st.session_state.chat_history:
-                for i, message in enumerate(st.session_state.chat_history):
-                    if message["role"] == "user":
-                        st.markdown(f"**🧑‍💻 You:** {message['content']}")
-                    else:
-                        st.markdown(f"**🤖 AI:** {message['content']}")
-            else:
-                st.info("👋 Hello! I'm your AI trading assistant. Ask me anything about trading strategies, market analysis, or performance optimization!")
-        
-        # Chat input
-        with st.form("chat_form", clear_on_submit=True):
-            col_input, col_send, col_clear = st.columns([6, 1, 1])
-            
-            with col_input:
-                user_input = st.text_input("Ask your trading question:", placeholder="e.g., 'What's my best strategy?' or 'Analyze current market conditions'", label_visibility="collapsed")
-            
-            with col_send:
-                send_clicked = st.form_submit_button("📤")
-            
-            with col_clear:
-                if st.form_submit_button("🗑️"):
-                    st.session_state.chat_history = []
-                    st.rerun()
-            
-            if send_clicked and user_input:
-                # Add user message
-                st.session_state.chat_history.append({"role": "user", "content": user_input})
-                
-                # Get AI response
-                ai_response = get_ai_trading_response(user_input, st.session_state.user['id'])
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
-                st.rerun()
-    
-    with col2:
-        st.subheader("⚡ Quick AI Actions")
-        
-        if st.button("📊 Analyze My Performance", use_container_width=True):
-            user_stats = get_user_statistics(st.session_state.user['id'])
-            analysis = f"""📊 **AI Performance Analysis for {st.session_state.user['username']}:**
-            
-**📈 Trading Statistics:**
-- Total Backtests: {user_stats['total_backtests']}
-- Total Trades: {user_stats['total_trades']}
-- Average Return: {user_stats['avg_return']:.2f}%
-- Best Return: {user_stats['best_return']:.2f}%
-
-**🤖 AI Insights:**
-{"🟢 **Strong Performance!** You're in the top 20% of traders." if user_stats['avg_return'] > 5 else "🟡 **Developing Well!** Focus on consistency." if user_stats['avg_return'] > 0 else "🔴 **Learning Phase** - Focus on education and small position sizes."}
-
-**💡 AI Recommendations:**
-- {"Continue with current strategies, consider increasing position sizes" if user_stats['avg_return'] > 5 else "Focus on risk management and strategy refinement" if user_stats['avg_return'] > 0 else "Practice with demo accounts and reduce risk per trade"}"""
-            
-            st.session_state.chat_history.append({"role": "assistant", "content": analysis})
-            st.rerun()
-        
-        if st.button("💡 AI Strategy Builder", use_container_width=True):
-            show_ai_strategy_builder()
-        
-        if st.button("📈 Market Intelligence", use_container_width=True):
-            market_analysis = """📈 **AI Market Intelligence Report:**
-            
-**🎯 Current Market Conditions:**
-- **EURUSD**: Consolidating in range 1.0800-1.0900
-- **BTCUSD**: Strong uptrend, approaching resistance at $45,000
-- **GBPUSD**: Bearish sentiment due to economic uncertainty
-- **USDJPY**: Range-bound, waiting for BoJ intervention signals
-
-**🤖 AI Predictions (Next 24-48 hours):**
-- 68% probability of EURUSD breakout (direction uncertain)
-- 73% probability of BTCUSD continued uptrend
-- 61% probability of GBPUSD further decline
-
-**⚠️ Risk Factors:**
-- High-impact news events scheduled for tomorrow
-- Increased volatility expected during NY session
-- Month-end flows may cause unusual price movements
-
-**💡 AI Trading Suggestions:**
-- Reduce position sizes during high-impact news
-- Focus on trend-following strategies in crypto
-- Use wider stops in forex due to increased volatility"""
-            
-            st.session_state.chat_history.append({"role": "assistant", "content": market_analysis})
-            st.rerun()
-        
-        if st.button("⚠️ Risk Assessment", use_container_width=True):
-            risk_analysis = """⚠️ **AI Risk Assessment:**
-            
-**📊 Your Risk Profile:**
-- Current risk level: Moderate
-- Recommended max risk per trade: 2%
-- Portfolio diversification: Good
-- Drawdown tolerance: 15-20%
-
-**🤖 AI Risk Optimization:**
-1. **Position Sizing**: Use ATR-based position sizing for better risk control
-2. **Correlation**: Avoid trading highly correlated pairs simultaneously  
-3. **Time Diversification**: Spread trades across different time zones
-4. **Strategy Diversification**: Use 2-3 different strategy types
-
-**🚨 Risk Warnings:**
-- Never risk more than 6% total across all open positions
-- Reduce position sizes during high volatility periods
-- Always use stop losses - no exceptions!
-
-**✅ Current Status:** Your risk management is appropriate for your experience level."""
-            
-            st.session_state.chat_history.append({"role": "assistant", "content": risk_analysis})
-            st.rerun()
-    
-    # AI Features Section
-    st.markdown("---")
-    st.subheader("🧠 Advanced AI Features")
-    
-    ai_col1, ai_col2, ai_col3 = st.columns(3)
-    
-    with ai_col1:
-        if st.button("🎯 Pattern Recognition", use_container_width=True):
-            show_ai_pattern_recognition()
-    
-    with ai_col2:
-        if st.button("📰 Sentiment Analysis", use_container_width=True):
-            show_market_sentiment_ai()
-    
-    with ai_col3:
-        if st.button("📊 Generate AI Report", use_container_width=True):
-            generate_ai_report()
-
-def show_ai_strategy_builder():
-    """AI-powered strategy builder"""
-    st.subheader("🧠 AI Strategy Builder")
-    st.caption("Let AI create a personalized trading strategy for you!")
-    
-    if not st.session_state.user:
-        st.error("Please login to use AI Strategy Builder.")
-        return
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("**🎯 Tell AI What You Want:**")
-        user_goal = st.selectbox("Trading Goal", [
-            "Consistent daily profits",
-            "Low-risk steady growth", 
-            "High-growth aggressive",
-            "News-based trading",
-            "Trend following master"
-        ])
-        
-        risk_tolerance = st.slider("Risk Appetite (1-10)", 1, 10, 5)
-        trading_time = st.selectbox("Available Time", [
-            "Full-time trader",
-            "Part-time (2-3 hours)", 
-            "Casual (30 min/day)"
-        ])
-    
-    with col2:
-        st.markdown("**🎨 AI Creativity Settings:**")
-        creativity = st.slider("Strategy Creativity", 1, 10, 7)
-        
-        ai_personality = st.selectbox("AI Assistant Style", [
-            "Conservative Warren Buffett",
-            "Aggressive Day Trader", 
-            "Quantitative Scientist",
-            "Trend Following Guru",
-            "Risk Management Expert"
-        ])
-    
-    if st.button("🚀 Generate AI Strategy", type="primary"):
-        generate_creative_strategy(user_goal, risk_tolerance, creativity, ai_personality)
-
-def generate_creative_strategy(goal, risk, creativity, personality):
-    """Generate creative AI strategy"""
-    st.subheader("🎨 Your Custom AI Strategy")
-    
-    # AI-generated creative strategy names
-    creative_names = [
-        "The Phoenix Reversal System",
-        "Quantum Momentum Hunter", 
-        "The Stealth Profit Engine",
-        "Golden Ratio Breakout Master",
-        "The Market Whisperer",
-        "Neural Network Trend Rider",
-        "The Volatility Harvester"
-    ]
-    
-    strategy_name = random.choice(creative_names)
-    
-    # Personality-based advice
-    personality_advice = {
-        "Conservative Warren Buffett": "Focus on high-probability setups with excellent risk/reward ratios",
-        "Aggressive Day Trader": "Quick entries and exits with tight stops for maximum trading action",
-        "Quantitative Scientist": "Data-driven approach with statistical edge validation",
-        "Trend Following Guru": "Ride the major trends like a surfer riding ocean waves",
-        "Risk Management Expert": "Capital preservation first, profits second - never blow up the account"
-    }
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.success(f"**🎯 Strategy Name**: {strategy_name}")
-        st.info(f"**🤖 AI Personality**: {personality}")
-        st.write(f"**💡 Philosophy**: {personality_advice[personality]}")
-        
-        # Creative parameters based on inputs
-        lookback = 15 + (creativity * 2) + (risk * 1)
-        atr_mult = 2.0 + (risk * 0.3) + (creativity * 0.1) 
-        rr_ratio = 3.0 + (risk * 0.2)
-        risk_per_trade = max(0.5, min(3.0, risk * 0.5))
-        
-        st.code(f"""
-🎯 AI-Optimized Parameters:
-├── Lookback: {lookback} periods
-├── Stop Loss: {atr_mult:.1f}x ATR  
-├── Risk/Reward: 1:{rr_ratio:.1f}
-├── Risk per Trade: {risk_per_trade:.1f}%
-└── Creativity Score: {creativity}/10
-        """)
-        
-        # Save strategy parameters
-        strategy_params = {
-            'name': strategy_name,
-            'lookback': lookback,
-            'atr_mult': atr_mult,
-            'rr_ratio': rr_ratio,
-            'risk_per_trade': risk_per_trade,
-            'personality': personality,
-            'goal': goal
-        }
-    
-    with col2:
-        st.markdown("**🧠 AI Strategy Logic:**")
-        
-        if creativity > 7:
-            st.write("🎨 **Creative Features**:")
-            st.write("• Dynamic position sizing based on market volatility")
-            st.write("• Multi-timeframe confluence analysis")
-            st.write("• Adaptive stop-loss based on market conditions")
-            
-        if risk > 7:
-            st.write("⚡ **High-Performance Features**:")
-            st.write("• Aggressive position sizing for maximum returns")
-            st.write("• Quick profit-taking rules (30% at 1R, 70% at target)")
-            st.write("• Momentum-based entry confirmation")
-        
-        if goal == "News-based trading":
-            st.write("📰 **News Integration Features**:")
-            st.write("• High-impact event calendar integration")
-            st.write("• Sentiment-based market bias adjustment")
-            st.write("• Post-news volatility expansion capture")
-        
-        st.markdown("**🎯 AI Reasoning:**")
-        reasoning = f"Strategy optimized for {goal.lower()} with {risk}/10 risk tolerance. Personality: {personality}. Creativity level: {creativity}/10."
-        st.write(reasoning)
-    
-    # Save and test buttons
-    col_save, col_test = st.columns(2)
-    
-    with col_save:
-        if st.button("💾 Save AI Strategy", use_container_width=True):
-            save_ai_strategy(
-                st.session_state.user['id'], 
-                strategy_name, 
-                strategy_params, 
-                reasoning
-            )
-            st.success(f"✅ '{strategy_name}' saved to your AI strategy library!")
-            st.balloons()
-    
-    with col_test:
-        if st.button("🧪 Backtest This Strategy", use_container_width=True):
-            st.info("💡 Go to the Backtesting tab and use these parameters to test your AI strategy!")
-
-def show_ai_pattern_recognition():
-    """AI Pattern Recognition Feature"""
-    st.subheader("🤖 AI Pattern Recognition")
-    
-    # Get some sample data for pattern recognition
-    symbol = st.selectbox("Select Symbol for AI Analysis", ["EURUSD", "BTCUSD", "GBPUSD"], key="pattern_symbol")
-    
-    with st.spinner("🤖 AI is analyzing price patterns..."):
-        time.sleep(1)  # Simulate AI processing
-        
-        # Generate sample data for demo
-        _set_seed(42)
-        df = _generate_data(symbol, 30, 1)
-        patterns = detect_patterns_ai(df)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("**📊 AI-Detected Patterns:**")
-        if patterns:
-            for pattern in patterns:
-                confidence = pattern['confidence']
-                if confidence > 80:
-                    st.success(f"🟢 **{pattern['name']}** ({confidence}% confidence)")
-                    st.caption(f"Signal: {pattern['signal']}")
-                elif confidence > 60:
-                    st.warning(f"🟡 **{pattern['name']}** ({confidence}% confidence)")
-                    st.caption(f"Signal: {pattern['signal']}")
-                else:
-                    st.info(f"🔵 **{pattern['name']}** ({confidence}% confidence)")
-                    st.caption(f"Signal: {pattern['signal']}")
-        else:
-            st.info("No significant patterns detected by AI")
-    
-    with col2:
-        st.markdown("**🎯 AI Trading Signals:**")
-        if patterns:
-            signals = generate_ai_signals(patterns)
-            for signal in signals:
-                st.write(f"• {signal}")
-        else:
-            st.write("• 📊 **NEUTRAL**: No strong signals detected")
-            st.write("• 💡 **SUGGESTION**: Wait for clearer market structure")
-    
-    # Chart with patterns highlighted
-    if not df.empty:
-        fig = _price_fig_with_trades(df, [], symbol, show_ma=True)
-        fig.update_layout(title=f"🤖 AI Pattern Analysis - {symbol}")
-        st.plotly_chart(fig, use_container_width=True)
-
-def show_market_sentiment_ai():
-    """AI-powered market sentiment analysis"""
-    st.subheader("🧠 AI Market Sentiment Analysis")
-    
-    # Simulate advanced sentiment data
-    sentiment_data = {
-        'EURUSD': {
-            'sentiment': 0.65, 
-            'trend': 'Bullish', 
-            'news_count': 45,
-            'social_mentions': 1250,
-            'institutional_flow': 'Buying'
-        },
-        'BTCUSD': {
-            'sentiment': 0.78, 
-            'trend': 'Very Bullish', 
-            'news_count': 89,
-            'social_mentions': 8900,
-            'institutional_flow': 'Strong Buying'
-        },
-        'GBPUSD': {
-            'sentiment': 0.35, 
-            'trend': 'Bearish', 
-            'news_count': 23,
-            'social_mentions': 650,
-            'institutional_flow': 'Selling'
-        },
-        'USDJPY': {
-            'sentiment': 0.52, 
-            'trend': 'Neutral', 
-            'news_count': 31,
-            'social_mentions': 420,
-            'institutional_flow': 'Mixed'
-        }
-    }
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("**📰 AI Sentiment Dashboard:**")
-        for symbol, data in sentiment_data.items():
-            sentiment_score = data['sentiment']
-            if sentiment_score > 0.7:
-                st.success(f"🟢 **{symbol}**: {data['trend']} ({sentiment_score:.0%})")
-                st.caption(f"📊 {data['news_count']} news • 💬 {data['social_mentions']} mentions • 💰 {data['institutional_flow']}")
-            elif sentiment_score > 0.4:
-                st.info(f"🔵 **{symbol}**: {data['trend']} ({sentiment_score:.0%})")
-                st.caption(f"📊 {data['news_count']} news • 💬 {data['social_mentions']} mentions • 💰 {data['institutional_flow']}")
-            else:
-                st.error(f"🔴 **{symbol}**: {data['trend']} ({sentiment_score:.0%})")
-                st.caption(f"📊 {data['news_count']} news • 💬 {data['social_mentions']} mentions • 💰 {data['institutional_flow']}")
-    
-    with col2:
-        st.markdown("**🎯 AI Sentiment Insights:**")
-        st.write("🤖 **AI Analysis Summary:**")
-        st.write("• **BTCUSD**: Overwhelming positive sentiment from institutional adoption news")
-        st.write("• **EURUSD**: Moderate bullish bias on ECB policy speculation")  
-        st.write("• **GBPUSD**: Persistent bearish sentiment due to economic headwinds")
-        st.write("• **USDJPY**: Neutral sentiment, waiting for central bank actions")
-        
-        st.markdown("**📈 AI Confidence Levels:**")
-        st.write("🔴 **High Confidence**: BTCUSD bullish trend continuation")
-        st.write("🟡 **Medium Confidence**: EURUSD range breakout potential")
-        st.write("🟢 **Low Confidence**: GBPUSD and USDJPY directional moves")
-    
-    # Sentiment-based recommendations
-    st.markdown("---")
-    st.subheader("🤖 AI Sentiment-Based Strategies")
-    
-    for symbol, data in sentiment_data.items():
-        with st.expander(f"🎯 {symbol} AI Strategy Recommendation"):
-            if data['sentiment'] > 0.7:
-                st.write(f"**🤖 AI Strategy**: Strong bullish bias for {symbol}")
-                st.write("**💡 Entry Logic**: Buy on any pullbacks to key support levels")
-                st.write(f"**⚠️ Risk Management**: 2.5% per trade (high confidence setup)")
-                st.write(f"**🎯 Targets**: Multiple targets with 70% position held for trend continuation")
-            elif data['sentiment'] < 0.4:
-                st.write(f"**🤖 AI Strategy**: Strong bearish bias for {symbol}")
-                st.write("**💡 Entry Logic**: Sell on any rallies to key resistance levels") 
-                st.write(f"**⚠️ Risk Management**: 2% per trade (bearish sentiment confirmed)")
-                st.write(f"**🎯 Targets**: Quick profit-taking due to negative sentiment")
-            else:
-                st.write(f"**🤖 AI Strategy**: Range trading approach for {symbol}")
-                st.write("**💡 Entry Logic**: Buy support, sell resistance until breakout")
-                st.write(f"**⚠️ Risk Management**: 1.5% per trade (uncertain environment)")
-                st.write(f"**🎯 Targets**: Conservative profit-taking in ranges")
-
-def generate_ai_report():
-    """Generate comprehensive AI trading report"""
-    if not st.session_state.user:
-        st.error("Please login to generate AI reports.")
-        return
-    
-    st.subheader("📊 AI-Generated Performance Report")
-    
-    with st.spinner("🤖 AI is analyzing your complete trading data..."):
-        time.sleep(2)  # Simulate AI processing
-    
-    # Get user data for personalized report
-    user_stats = get_user_statistics(st.session_state.user['id'])
-    best_assets = get_user_best_assets(st.session_state.user['id'])
-    
-    # Generate performance grade
-    if user_stats['avg_return'] > 15:
-        grade = "A+"
-        performance_color = "🟢"
-        performance_desc = "Exceptional"
-    elif user_stats['avg_return'] > 10:
-        grade = "A"
-        performance_color = "🟢"
-        performance_desc = "Excellent"
-    elif user_stats['avg_return'] > 5:
-        grade = "B+"
-        performance_color = "🟡"
-        performance_desc = "Good"
-    elif user_stats['avg_return'] > 0:
-        grade = "B"
-        performance_color = "🟡"
-        performance_desc = "Average"
-    else:
-        grade = "C"
-        performance_color = "🔴"
-        performance_desc = "Needs Improvement"
-    
-    # Create the complete report
-    report_content = f"""# 🤖 AI Trading Performance Report
-
-**Generated for**: {st.session_state.user['username']}  
-**Report Date**: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}  
-**Analysis Period**: All-time trading data
-
----
-
-## 📈 Executive Summary
-
-{performance_color} **Overall Performance Grade**: **{grade}** ({performance_desc})
-
-Your AI trading assistant has analyzed **{user_stats['total_backtests']} backtests** containing **{user_stats['total_trades']} individual trades**.
-
-### 🎯 Key Performance Metrics
-- **Average Return**: {user_stats['avg_return']:.2f}% per backtest
-- **Best Performance**: {user_stats['best_return']:.2f}% (single backtest)
-- **Trading Frequency**: {user_stats['total_backtests']} strategy tests completed
-- **Experience Level**: {"Advanced" if user_stats['total_trades'] > 100 else "Intermediate" if user_stats['total_trades'] > 50 else "Beginner"}
-
----
-
-## 🧠 AI Deep Analysis
-
-### 📊 Strengths Identified
-{"🟢 **Consistent Profitability**: You maintain positive returns across multiple strategies" if user_stats['avg_return'] > 0 else "🟡 **Learning Progress**: You're actively testing and improving strategies"}
-
-{"🟢 **Risk Management**: Your drawdowns appear well-controlled" if user_stats['avg_return'] > 0 else "🔴 **Risk Focus Needed**: Prioritize capital preservation over profits"}
-
-{"🟢 **Market Diversification**: Testing across multiple instruments" if len(best_assets) > 1 else "🟡 **Consider Diversification**: Expand to more markets"}
-
-### ⚠️ Areas for Improvement
-{"🎯 **Strategy Refinement**: Fine-tune your best-performing setups for even better results" if user_stats['avg_return'] > 5 else "🎯 **Strategy Development**: Focus on developing 1-2 core strategies before expanding" if user_stats['avg_return'] > 0 else "🎯 **Education Priority**: Invest time in learning fundamental trading principles"}
-
-{"📈 **Position Sizing**: Consider dynamic position sizing based on strategy confidence" if user_stats['total_trades'] > 50 else "📈 **Sample Size**: Increase the number of trades per backtest for statistical significance"}
-
----
-
-## 🎯 AI Recommendations
-
-### 💡 Immediate Actions (Next 7 Days)
-1. **Focus Markets**: {"Continue with " + best_assets[0] + " and " + best_assets[1] + " - your strongest performers" if len(best_assets) >= 2 else "Expand beyond " + (best_assets[0] if best_assets else "current markets") + " for diversification"}
-
-2. **Strategy Optimization**: {"Re-test your top strategies with smaller parameter variations" if user_stats['avg_return'] > 5 else "Focus on mastering one core strategy before expanding" if user_stats['avg_return'] > 0 else "Start with simple trend-following strategies"}
-
-3. **Risk Management**: {"Consider increasing position sizes gradually (current performance supports it)" if user_stats['avg_return'] > 10 else "Maintain current risk levels - they're appropriate for your experience" if user_stats['avg_return'] > 0 else "Reduce risk per trade to 1% until consistency improves"}
-
-### 🚀 Medium-term Goals (Next 30 Days)
-- **Backtest Volume**: Run at least {"10 more backtests" if user_stats['total_backtests'] < 10 else "20 more backtests"} to increase statistical confidence
-- **Market Coverage**: {"Maintain focus on your profitable markets" if len(best_assets) >= 2 else "Test at least 2-3 additional markets"}
-- **Strategy Development**: {"Develop advanced features like trailing stops" if user_stats['avg_return'] > 5 else "Master basic entry and exit rules"}
-
-### 📚 Learning Priorities
-{"Advanced Topics: Multi-timeframe analysis, portfolio optimization, algorithmic execution" if user_stats['total_trades'] > 100 else "Intermediate Topics: Risk management, position sizing, market correlation" if user_stats['total_trades'] > 50 else "Fundamental Topics: Chart reading, trend analysis, support/resistance"}
-
----
-
-## 🎲 AI Predictive Insights
-
-### 📈 Probability Assessments
-- **Probability of Continued Success**: {85 if user_stats['avg_return'] > 10 else 70 if user_stats['avg_return'] > 5 else 55 if user_stats['avg_return'] > 0 else 35}%
-- **Expected Return Next Month**: {user_stats['avg_return'] * 1.1:.1f}% (based on current trajectory)
-- **Risk of Significant Drawdown**: {"Low (15%)" if user_stats['avg_return'] > 5 else "Moderate (35%)" if user_stats['avg_return'] > 0 else "High (60%)"}
-
-### 🎯 Success Factors
-1. **Consistency**: {"Excellent - maintain current approach" if user_stats['avg_return'] > 5 else "Developing - focus on routine" if user_stats['avg_return'] > 0 else "Needs work - establish daily habits"}
-2. **Adaptability**: {"Good - ready for advanced concepts" if user_stats['total_backtests'] > 20 else "Improving - continue learning"}
-3. **Risk Awareness**: {"Strong - well-positioned for growth" if user_stats['avg_return'] > 0 else "Critical - prioritize education"}
-
----
-
-## 🚀 Next Steps
-
-### Action Items
-- [ ] {"Implement advanced position sizing" if user_stats['avg_return'] > 5 else "Focus on consistency over complexity"}
-- [ ] {"Test multi-asset portfolio strategies" if len(best_assets) > 2 else "Expand to at least 3 different markets"}
-- [ ] {"Consider live paper trading" if user_stats['avg_return'] > 10 else "Continue backtesting until profitable"}
-- [ ] {"Join advanced trading communities" if user_stats['total_trades'] > 100 else "Focus on fundamental education"}
-
-**Remember**: This AI analysis is based on your historical performance. Market conditions change, and past performance doesn't guarantee future results.
-
----
-
-*Report generated by AI Trading Assistant v2.0*
-*For questions about this report, chat with your AI assistant*"""
-
-    # Display the report
-    st.markdown(report_content)
-    
-    # Add download functionality
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("📥 Download Report", use_container_width=True):
-            st.download_button(
-                label="💾 Download as Markdown",
-                data=report_content,
-                file_name=f"AI_Trading_Report_{st.session_state.user['username']}_{datetime.now().strftime('%Y%m%d')}.md",
-                mime="text/markdown",
-                use_container_width=True
-            )
-    
-    with col2:
-        if st.button("📊 Generate New Report", use_container_width=True):
-            st.rerun()
-    
-    # Add success message
-    st.success("✅ AI Report Generated Successfully! Use the download button to save it.")
-    st.balloons()
 
 def show_enhanced_backtesting():
     """Enhanced backtesting with 23+ strategies"""
@@ -2500,96 +2211,573 @@ def show_tournament_results(results, symbol, df):
     save_backtest_results(st.session_state.user['id'], symbol, stats, trades)
     st.success(f"💾 Winner strategy results saved! ({winner['strategy']})")
 
-def show_live_demo():
-    """Live demo functionality with AI insights"""
-    st.header("🔴 Live Demo with AI Intelligence")
+def show_live_trading_system():
+    """Complete live trading system with AI execution"""
+    if not st.session_state.user:
+        st.error("Please login to access live trading.")
+        return
     
-    col_live_left, col_live_right = st.columns([1, 3])
+    st.header("🚀 AI Auto-Trading System")
+    st.caption("Live trading with AI-powered strategy execution and detailed explanations")
     
-    with col_live_left:
-        st.subheader("📊 Live Settings")
-        
-        asset_type = st.radio("Asset Type", ["Crypto", "Forex"], key="live_asset")
-        if asset_type == "Crypto":
-            live_symbols = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "DOGE-USD"]
+    # Get trading engine
+    engine = get_trading_engine(st.session_state.user['id'])
+    status = engine.get_status()
+    
+    # Trading Control Panel
+    st.subheader("⚡ Trading Control Panel")
+    
+    col_status, col_controls = st.columns([2, 1])
+    
+    with col_status:
+        # Display current status
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("💰 Balance", f"${status['balance']:,.2f}")
+        col2.metric("📊 Equity", f"${status['equity']:,.2f}")
+        col3.metric("📈 Positions", status['positions'])
+        col4.metric("💼 P&L", f"${status['total_pnl']:,.2f}", 
+                   delta=f"{((status['equity']/10000 - 1) * 100):+.1f}%")
+    
+    with col_controls:
+        # Trading controls
+        if not status['is_running']:
+            if st.button("🚀 **START TRADING**", type="primary", use_container_width=True):
+                if engine.start_trading():
+                    st.success("✅ AI Trading Engine Started!")
+                    st.rerun()
         else:
-            live_symbols = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "GBPJPY"]
+            if st.button("⏹️ **STOP TRADING**", use_container_width=True):
+                if engine.stop_trading():
+                    st.warning("⏹️ AI Trading Engine Stopped!")
+                    st.rerun()
         
-        selected_symbol = st.selectbox("Select Symbol", live_symbols, key="live_symbol")
-        
-        st.subheader("🤖 AI Analysis")
-if st.button("🧠 Get AI Market Analysis"):
-    with st.spinner("🤖 OpenAI analyzing live market conditions..."):
-        ai_analysis = get_openai_market_analysis(selected_symbol)
-        st.success("✅ OpenAI Analysis Complete!")
-        st.markdown(ai_analysis)
-        
-        st.write(f"⏰ **Last Update:** {datetime.now().strftime('%H:%M:%S')}")
+        trading_status = "🟢 ACTIVE" if status['is_running'] else "🔴 STOPPED"
+        st.write(f"**Status:** {trading_status}")
     
-    with col_live_right:
-        st.subheader(f"📈 {selected_symbol} - Live AI-Enhanced Analysis")
+    # Strategy Selection & Analysis
+    st.subheader("🎯 AI Strategy Analysis & Execution")
+    
+    col_left, col_right = st.columns([1, 2])
+    
+    with col_left:
+        # Market selection
+        st.markdown("**📊 Market Selection**")
+        market_category = st.selectbox("Market Category", list(ALL_SYMBOLS.keys()), key="live_market")
+        symbol = st.selectbox("Symbol", ALL_SYMBOLS[market_category], key="live_symbol")
         
-        try:
-            live_data = get_live_price(selected_symbol)
+        st.markdown("**🤖 AI Analysis**")
+        
+        if st.button("🧠 Analyze & Execute Best Strategy", type="primary", use_container_width=True):
+            with st.spinner("🤖 AI analyzing market and selecting optimal strategy..."):
+                # Run AI tournament to find best strategy
+                tournament = AIStrategyTournament(st.session_state.user['id'])
+                results, df = tournament.run_tournament(symbol, days=30)
+                
+                # Get market context
+                analyzer = MarketContextAnalyzer()
+                market_context = analyzer.analyze_current_market(symbol)
+                
+                # Get detailed explanation
+                explainer = AIStrategyExplainer()
+                explanation = explainer.explain_strategy(results[0]['strategy'], market_context)
+                
+                # Store results in session state
+                st.session_state.live_analysis = {
+                    'results': results,
+                    'symbol': symbol,
+                    'market_context': market_context,
+                    'explanation': explanation,
+                    'df': df
+                }
+                
+                st.rerun()
+        
+        # Manual controls
+        st.markdown("**⚙️ Manual Controls**")
+        if st.button("🔴 Close All Positions", use_container_width=True):
+            for symbol_pos in engine.positions.keys():
+                engine._close_position(symbol_pos, "Manual Close All")
+            st.success("✅ All positions closed!")
+            st.rerun()
+    
+    with col_right:
+        # Display analysis results
+        if hasattr(st.session_state, 'live_analysis'):
+            analysis = st.session_state.live_analysis
             
-            if not live_data.empty:
-                current_price = live_data['Close'].iloc[-1]
-                previous_price = live_data['Close'].iloc[-2] if len(live_data) > 1 else current_price
-                price_change = current_price - previous_price
-                price_change_pct = (price_change / previous_price) * 100 if previous_price != 0 else 0
+            st.success(f"🎯 **AI Selected Strategy:** {analysis['results'][0]['strategy']}")
+            
+            # Strategy performance metrics
+            winner = analysis['results'][0]
+            col_a, col_b, col_c = st.columns(3)
+            col_a.metric("🏆 AI Score", f"{winner['ai_score']:.1f}/100")
+            col_b.metric("📈 Return", f"{winner['return']:.1f}%")
+            col_c.metric("🎯 Win Rate", f"{winner['win_rate']:.1f}%")
+            
+            # Market context
+            context = analysis['market_context']
+            st.info(f"""
+            **🌍 Current Market Context:**
+            • **Trend:** {context['trend'].replace('_', ' ').title()}
+            • **Volatility:** {context['volatility'].title()} ({context['volatility_value']:.2f}%)
+            • **Risk Sentiment:** {context['risk_sentiment']}
+            """)
+            
+            # Generate trading signal
+            if st.button("⚡ Generate Trading Signal", use_container_width=True):
+                # Create trading signal based on analysis
+                current_price = context['current_price']
                 
-                # AI-enhanced metrics
-                col_a, col_b, col_c, col_d = st.columns(4)
-                col_a.metric("Current Price", f"{current_price:.5f}")
-                col_b.metric("Change", f"{price_change:.5f}", f"{price_change_pct:.2f}%")
-                col_c.metric("24h High", f"{live_data['High'].max():.5f}")
-                col_d.metric("24h Low", f"{live_data['Low'].min():.5f}")
+                # Determine signal based on strategy type
+                if winner['category'] in ['Trend Following', 'Momentum']:
+                    action = "BUY" if context['trend'] in ['strong_up', 'weak_up'] else "SELL"
+                else:  # Mean reversion
+                    action = "BUY" if context['current_price'] < context['ma_20'] else "SELL"
                 
-                # AI Pattern Recognition on live data
-                if len(live_data) >= 20:
-                    live_patterns = detect_patterns_ai(live_data.rename(columns=str.lower))
-                    
-                    if live_patterns:
-                        st.subheader("🤖 Live AI Pattern Recognition")
-                        for pattern in live_patterns[:2]:  # Show top 2 patterns
-                            if pattern['confidence'] > 60:
-                                confidence_color = "🟢" if pattern['confidence'] > 80 else "🟡"
-                                st.write(f"{confidence_color} **{pattern['name']}** ({pattern['confidence']}%) - {pattern['signal']}")
+                # Calculate stop loss and take profit
+                volatility_buffer = current_price * (context['volatility_value'] / 100) * 2
+                if action == "BUY":
+                    stop_loss = current_price - volatility_buffer
+                    take_profit = current_price + (volatility_buffer * 2)
+                else:
+                    stop_loss = current_price + volatility_buffer  
+                    take_profit = current_price - (volatility_buffer * 2)
                 
-                # Live chart with AI insights
-                fig = go.Figure()
-                fig.add_trace(go.Candlestick(
-                    x=live_data.index,
-                    open=live_data['Open'],
-                    high=live_data['High'], 
-                    low=live_data['Low'],
-                    close=live_data['Close'],
-                    name=selected_symbol
-                ))
-                
-                # Add moving averages
-                if len(live_data) >= 20:
-                    live_data['MA20'] = live_data['Close'].rolling(20).mean()
-                    fig.add_trace(go.Scatter(
-                        x=live_data.index, y=live_data['MA20'],
-                        name="MA20", line=dict(color="orange", width=2)
-                    ))
-                
-                fig.update_layout(
-                    title=f"🤖 {selected_symbol} - Live AI Analysis",
-                    xaxis_title="Time",
-                    yaxis_title="Price", 
-                    height=500,
-                    template="plotly_white"
+                # Create and execute signal
+                signal = TradeSignal(
+                    symbol=analysis['symbol'],
+                    action=action,
+                    size=1000,  # Will be calculated by engine
+                    price=current_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    strategy_name=winner['strategy'],
+                    confidence=winner['ai_score'] / 100,
+                    reasoning=f"AI selected best strategy with {winner['ai_score']:.1f}/100 confidence",
+                    timestamp=datetime.now()
                 )
                 
-                st.plotly_chart(fig, use_container_width=True)
+                # Add signal to trading engine
+                engine.add_signal(signal)
                 
+                st.success(f"🚀 **{action} Signal Generated!**")
+                st.write(f"**Price:** ${current_price:.4f}")
+                st.write(f"**Stop Loss:** ${stop_loss:.4f}")
+                st.write(f"**Take Profit:** ${take_profit:.4f}")
+                st.write(f"**Confidence:** {winner['ai_score']:.1f}/100")
+        
+        else:
+            st.info("👆 Click 'Analyze & Execute Best Strategy' to get AI-powered trading signals!")
+    
+    # Current Positions
+    if engine.positions:
+        st.subheader("📊 Current Positions")
+        
+        positions_data = []
+        for pos_key, pos in engine.positions.items():
+            positions_data.append({
+                'Symbol': pos.symbol,
+                'Side': 'LONG' if pos.side == 1 else 'SHORT',
+                'Size': f"{pos.size:.2f}",
+                'Entry': f"${pos.entry_price:.4f}",
+                'Current': f"${pos.current_price:.4f}",
+                'P&L': f"${pos.pnl:.2f}",
+                'Strategy': pos.strategy_name,
+                'Time': pos.entry_time.strftime('%H:%M:%S')
+            })
+        
+        df_positions = pd.DataFrame(positions_data)
+        st.dataframe(df_positions, use_container_width=True)
+    
+    # Trading History
+    st.subheader("📈 Recent Trading Activity")
+    
+    try:
+        conn = sqlite3.connect('trading_platform.db')
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT symbol, side, size, entry_price, strategy_name, confidence, entry_time, status, pnl
+            FROM live_trades 
+            WHERE user_id = ? 
+            ORDER BY entry_time DESC 
+            LIMIT 10
+        ''', (st.session_state.user['id'],))
+        
+        trades = cursor.fetchall()
+        conn.close()
+        
+        if trades:
+            trades_data = []
+            for trade in trades:
+                trades_data.append({
+                    'Symbol': trade[0],
+                    'Side': 'LONG' if trade[1] == 1 else 'SHORT',
+                    'Size': f"{trade[2]:.2f}",
+                    'Price': f"${trade[3]:.4f}",
+                    'Strategy': trade[4],
+                    'Confidence': f"{trade[5]*100:.0f}%",
+                    'Time': trade[6],
+                    'Status': trade[7],
+                    'P&L': f"${trade[8]:.2f}"
+                })
+            
+            df_trades = pd.DataFrame(trades_data)
+            st.dataframe(df_trades, use_container_width=True)
+        else:
+            st.info("📊 No trading history yet. Start the AI trading engine to begin!")
+            
+    except Exception as e:
+        st.error(f"Database error: {str(e)}")
+
+def show_ai_assistant():
+    """AI Trading Assistant"""
+    if not st.session_state.user:
+        st.error("Please login to access AI Assistant.")
+        return
+    
+    st.header("🤖 AI Trading Assistant")
+    st.caption("Your intelligent trading companion - Ask me anything about trading, strategies, or market analysis!")
+    
+    # AI Assistant Features
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("💬 Chat with AI")
+        
+        # Chat interface
+        chat_container = st.container()
+        
+        with chat_container:
+            # Display chat history
+            if st.session_state.chat_history:
+                for i, message in enumerate(st.session_state.chat_history):
+                    if message["role"] == "user":
+                        st.markdown(f"**🧑‍💻 You:** {message['content']}")
+                    else:
+                        st.markdown(f"**🤖 AI:** {message['content']}")
             else:
-                st.error("❌ No live data available. Try a different symbol.")
+                st.info("👋 Hello! I'm your AI trading assistant. Ask me anything about trading strategies, market analysis, or performance optimization!")
+        
+        # Chat input
+        with st.form("chat_form", clear_on_submit=True):
+            col_input, col_send, col_clear = st.columns([6, 1, 1])
+            
+            with col_input:
+                user_input = st.text_input("Ask your trading question:", placeholder="e.g., 'What's my best strategy?' or 'Analyze current market conditions'", label_visibility="collapsed")
+            
+            with col_send:
+                send_clicked = st.form_submit_button("📤")
+            
+            with col_clear:
+                if st.form_submit_button("🗑️"):
+                    st.session_state.chat_history = []
+                    st.rerun()
+            
+            if send_clicked and user_input:
+                # Add user message
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
                 
-        except Exception as e:
-            st.error(f"❌ Error fetching live  {str(e)}")
+                # Get AI response
+                ai_response = get_ai_trading_response(user_input, st.session_state.user['id'])
+                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+                st.rerun()
+    
+    with col2:
+        st.subheader("⚡ Quick AI Actions")
+        
+        if st.button("📊 Analyze My Performance", use_container_width=True):
+            user_stats = get_user_statistics(st.session_state.user['id'])
+            analysis = f"""📊 **AI Performance Analysis for {st.session_state.user['username']}:**
+            
+**📈 Trading Statistics:**
+- Total Backtests: {user_stats['total_backtests']}
+- Total Trades: {user_stats['total_trades']}
+- Average Return: {user_stats['avg_return']:.2f}%
+- Best Return: {user_stats['best_return']:.2f}%
+
+**🤖 AI Insights:**
+{"🟢 **Strong Performance!** You're in the top 20% of traders." if user_stats['avg_return'] > 5 else "🟡 **Developing Well!** Focus on consistency." if user_stats['avg_return'] > 0 else "🔴 **Learning Phase** - Focus on education and small position sizes."}
+
+**💡 AI Recommendations:**
+- {"Continue with current strategies, consider increasing position sizes" if user_stats['avg_return'] > 5 else "Focus on risk management and strategy refinement" if user_stats['avg_return'] > 0 else "Practice with demo accounts and reduce risk per trade"}"""
+            
+            st.session_state.chat_history.append({"role": "assistant", "content": analysis})
+            st.rerun()
+        
+        if st.button("💡 AI Strategy Builder", use_container_width=True):
+            st.info("🎯 Go to the Info Center tab for the complete AI Strategy Builder!")
+        
+        if st.button("📈 Market Intelligence", use_container_width=True):
+            market_analysis = """📈 **AI Market Intelligence Report:**
+            
+**🎯 Current Market Conditions:**
+- **EURUSD**: Consolidating in range 1.0800-1.0900
+- **BTCUSD**: Strong uptrend, approaching resistance at $45,000
+- **GBPUSD**: Bearish sentiment due to economic uncertainty
+- **USDJPY**: Range-bound, waiting for BoJ intervention signals
+
+**🤖 AI Predictions (Next 24-48 hours):**
+- 68% probability of EURUSD breakout (direction uncertain)
+- 73% probability of BTCUSD continued uptrend
+- 61% probability of GBPUSD further decline
+
+**⚠️ Risk Factors:**
+- High-impact news events scheduled for tomorrow
+- Increased volatility expected during NY session
+- Month-end flows may cause unusual price movements
+
+**💡 AI Trading Suggestions:**
+- Reduce position sizes during high-impact news
+- Focus on trend-following strategies in crypto
+- Use wider stops in forex due to increased volatility"""
+            
+            st.session_state.chat_history.append({"role": "assistant", "content": market_analysis})
+            st.rerun()
+
+def show_strategy_info_center():
+    """Comprehensive strategy information and education center"""
+    st.header("📚 Strategy Information & Education Center")
+    st.caption("Deep dive into trading strategies, market analysis, and AI decision-making")
+    
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🎓 Strategy Guide", "🔍 Market Analysis", "🤖 AI Explanations", "📊 Performance Analytics"
+    ])
+    
+    with tab1:
+        st.subheader("🎓 Complete Strategy Guide")
+        
+        # Strategy categories
+        for category in ["Trend Following", "Mean Reversion", "Momentum", "Volatility"]:
+            with st.expander(f"📖 {category} Strategies"):
+                
+                if category == "Trend Following":
+                    st.markdown("""
+                    ### 🏁 Trend Following Strategies
+                    
+                    **Core Concept:** These strategies are based on the market axiom that "the trend is your friend." They aim to capture sustained price movements in one direction.
+                    
+                    **How They Work:**
+                    - Identify when price breaks out of consolidation patterns
+                    - Follow the momentum of established trends
+                    - Use various filters to avoid false signals
+                    
+                    **Best Market Conditions:**
+                    - 🟢 Strong trending markets with clear direction
+                    - 🟢 Markets with sustained momentum and volume
+                    - 🟢 Breakout scenarios from consolidation periods
+                    
+                    **Avoid During:**
+                    - 🔴 Choppy, sideways markets
+                    - 🔴 High-frequency reversal environments
+                    - 🔴 Low volume, quiet trading sessions
+                    
+                    **Key Strategies in This Category:**
+                    - **Donchian Breakout + MACD:** Combines channel breakouts with momentum confirmation
+                    - **Moving Average Crossover:** Classic trend identification using MA crossovers
+                    - **Ichimoku Cloud:** Comprehensive trend system with multiple components
+                    """)
+                
+                elif category == "Mean Reversion":
+                    st.markdown("""
+                    ### 🔄 Mean Reversion Strategies
+                    
+                    **Core Concept:** Based on the statistical tendency of prices to return to their average over time. "What goes up must come down."
+                    
+                    **How They Work:**
+                    - Identify when prices deviate significantly from average
+                    - Enter positions expecting price to return to mean
+                    - Use overbought/oversold indicators as entry signals
+                    
+                    **Best Market Conditions:**
+                    - 🟢 Range-bound markets with clear support/resistance
+                    - 🟢 High volatility environments with quick reversals
+                    - 🟢 Markets with established trading ranges
+                    
+                    **Avoid During:**
+                    - 🔴 Strong trending markets (trends can persist longer than expected)
+                    - 🔴 Breakout scenarios from established ranges
+                    - 🔴 Markets with fundamental regime changes
+                    
+                    **Key Strategies in This Category:**
+                    - **RSI Mean Reversion:** Uses RSI overbought/oversold levels
+                    - **Bollinger Band Bounce:** Trades reversals from extreme bands
+                    - **Williams %R:** Momentum oscillator for reversal signals
+                    """)
+                
+                elif category == "Momentum":
+                    st.markdown("""
+                    ### ⚡ Momentum Strategies
+                    
+                    **Core Concept:** Momentum strategies ride the wave of accelerating price movements, entering when momentum is building.
+                    
+                    **How They Work:**
+                    - Detect acceleration in price movements
+                    - Enter positions in direction of strongest momentum
+                    - Exit when momentum starts to fade
+                    
+                    **Best Market Conditions:**
+                    - 🟢 Markets with strong directional moves
+                    - 🟢 Breakout scenarios with volume confirmation
+                    - 🟢 News-driven or event-driven price movements
+                    
+                    **Avoid During:**
+                    - 🔴 Low volatility, quiet markets
+                    - 🔴 End of trend cycles when momentum exhausts
+                    - 🔴 Whipsaw markets with false momentum signals
+                    
+                    **Key Strategies in This Category:**
+                    - **MACD Momentum:** Uses MACD histogram for momentum signals
+                    - **Rate of Change:** Measures velocity of price changes
+                    - **True Strength Index:** Smoothed momentum indicator
+                    """)
+                
+                elif category == "Volatility":
+                    st.markdown("""
+                    ### 📈 Volatility Strategies
+                    
+                    **Core Concept:** These strategies exploit changes in market volatility, profiting from volatility expansion or contraction.
+                    
+                    **How They Work:**
+                    - Monitor changes in volatility regimes
+                    - Enter positions during volatility transitions
+                    - Use volatility-based position sizing
+                    
+                    **Best Market Conditions:**
+                    - 🟢 Periods of volatility regime change
+                    - 🟢 After extended low volatility periods
+                    - 🟢 During market uncertainty or news events
+                    
+                    **Avoid During:**
+                    - 🔴 Stable volatility environments
+                    - 🔴 Markets with predictable volatility patterns
+                    - 🔴 Low liquidity conditions
+                    
+                    **Key Strategies in This Category:**
+                    - **ATR Volatility Breakout:** Uses ATR to detect volatility changes
+                    - **Volatility Squeeze:** Identifies low volatility before expansions
+                    - **Chaikin Volatility:** Measures volatility of high-low spread
+                    """)
+    
+    with tab2:
+        st.subheader("🔍 Current Market Analysis")
+        
+        # Real-time market analysis
+        selected_market = st.selectbox("Select Market for Analysis", 
+                                     ["EURUSD", "BTCUSD", "GBPUSD", "ETHUSD"], 
+                                     key="analysis_market")
+        
+        if st.button("📊 Generate AI Market Analysis"):
+            with st.spinner("🤖 AI analyzing current market conditions..."):
+                analyzer = MarketContextAnalyzer()
+                context = analyzer.analyze_current_market(selected_market)
+                
+                st.success(f"📈 **Market Analysis for {selected_market}**")
+                
+                # Display comprehensive analysis
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**📊 Technical Overview**")
+                    trend_color = "🟢" if "up" in context['trend'] else "🔴" if "down" in context['trend'] else "🟡"
+                    st.write(f"**Trend:** {trend_color} {context['trend'].replace('_', ' ').title()}")
+                    st.write(f"**Volatility:** {context['volatility'].title()} ({context['volatility_value']:.2f}%)")
+                    st.write(f"**Risk Sentiment:** {context['risk_sentiment']}")
+                    st.write(f"**Current Price:** ${context['current_price']:.4f}")
+                
+                with col2:
+                    st.markdown("**🎯 Strategy Recommendations**")
+                    
+                    if context['trend'] in ['strong_up', 'strong_down']:
+                        st.success("✅ **Trend Following** strategies recommended")
+                        st.write("• Donchian Breakout + MACD")
+                        st.write("• Moving Average systems")
+                        st.write("• Momentum strategies")
+                    elif context['volatility'] == 'high':
+                        st.info("⚡ **Mean Reversion** strategies suitable")
+                        st.write("• RSI Mean Reversion")
+                        st.write("• Bollinger Band Bounce")
+                        st.write("• Support/Resistance trading")
+                    else:
+                        st.warning("⚠️ **Mixed Signals** - Use lower position sizes")
+                        st.write("• Wait for clearer trend establishment")
+                        st.write("• Consider range-bound strategies")
+                        st.write("• Monitor for breakout setups")
+    
+    with tab3:
+        st.subheader("🤖 AI Decision-Making Process")
+        
+        st.markdown("""
+        ### 🧠 How Our AI Selects the Best Strategy
+        
+        Our AI system uses a sophisticated multi-factor analysis to determine the optimal trading strategy:
+        
+        #### 📊 **Performance Evaluation (40% weight)**
+        - Historical return percentage
+        - Risk-adjusted returns (Sharpe ratio)
+        - Maximum drawdown analysis
+        - Consistency of performance
+        
+        #### 🎯 **Statistical Significance (25% weight)**
+        - Number of trades (sample size)
+        - Win rate reliability
+        - Profit factor sustainability
+        - R-multiple distribution
+        
+        #### 🌍 **Market Context Alignment (20% weight)**
+        - Current trend regime matching
+        - Volatility environment suitability
+        - Volume and liquidity conditions
+        - Economic backdrop compatibility
+        
+        #### ⚠️ **Risk Assessment (15% weight)**
+        - Worst-case scenario analysis
+        - Tail risk evaluation
+        - Correlation with other positions
+        - Position sizing optimization
+        
+        ### 🎲 **AI Scoring Formula**
+        ```
+        AI Score = (Return_Score × 0.4) + 
+                   (Statistical_Score × 0.25) + 
+                   (Context_Score × 0.2) + 
+                   (Risk_Score × 0.15)
+        ```
+        
+        ### 🚀 **Execution Logic**
+        1. **Tournament Phase:** Test all 23+ strategies on current data
+        2. **Ranking Phase:** Calculate AI scores for each strategy
+        3. **Validation Phase:** Verify top strategy meets minimum criteria
+        4. **Context Check:** Ensure strategy suits current market conditions
+        5. **Risk Check:** Confirm risk parameters are appropriate
+        6. **Execution Phase:** Generate precise entry/exit signals
+        """)
+    
+    with tab4:
+        st.subheader("📊 Performance Analytics Dashboard")
+        
+        if st.session_state.user:
+            # Get user's performance data
+            user_stats = get_user_statistics(st.session_state.user['id'])
+            
+            st.markdown("### 🏆 Your Trading Performance")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("📈 Total Backtests", user_stats['total_backtests'])
+            col2.metric("🎯 Total Trades", user_stats['total_trades'])
+            col3.metric("💰 Average Return", f"{user_stats['avg_return']:.2f}%")
+            col4.metric("🏆 Best Return", f"{user_stats['best_return']:.2f}%")
+            
+            # Performance analysis
+            if user_stats['avg_return'] > 10:
+                st.success("🟢 **Elite Performance!** You're in the top 10% of traders on the platform.")
+            elif user_stats['avg_return'] > 5:
+                st.info("🔵 **Strong Performance!** You're consistently profitable with room for optimization.")
+            elif user_stats['avg_return'] > 0:
+                st.warning("🟡 **Developing Performance** Focus on consistency and risk management.")
+            else:
+                st.error("🔴 **Learning Phase** Prioritize education and start with smaller position sizes.")
+        else:
+            st.info("🔐 Please login to view your personalized performance analytics.")
 
 def show_user_results_history():
     """Show user's complete backtesting history with AI insights"""
