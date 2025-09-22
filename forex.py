@@ -1080,6 +1080,94 @@ def get_platform_statistics():
         'total_trades': total_trades
     }
 
+def get_openai_market_analysis(symbol):
+    """Get OpenAI market analysis for specific symbol"""
+    try:
+        client = openai.OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
+        
+        prompt = f"""Analyze the current market conditions for {symbol}:
+        
+        1. Technical outlook (trend, support/resistance)
+        2. Fundamental factors affecting price
+        3. Risk factors to watch
+        4. Trading recommendations
+        5. Probability assessment for next 24-48 hours
+        
+        Be specific and actionable."""
+        
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=600
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        return f"❌ OpenAI Market Analysis Error: {str(e)}\n\nPlease check your API key and try again."
+
+def optimize_strategy_with_ai(user_stats, current_params):
+    """Use OpenAI to optimize strategy parameters"""
+    try:
+        client = openai.OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
+        
+        prompt = f"""Optimize these trading strategy parameters:
+        
+        Current Performance:
+        - Average Return: {user_stats['avg_return']:.1f}%
+        - Total Trades: {user_stats['total_trades']}
+        - Win Rate: {user_stats.get('win_rate', 'Unknown')}%
+        
+        Current Parameters: {current_params}
+        
+        Suggest optimized parameters and explain your reasoning."""
+        
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        return f"❌ OpenAI Optimization Error: {str(e)}\n\nUsing fallback optimization..."
+
+def get_openai_risk_assessment(user_id, current_positions=None):
+    """Get OpenAI-powered risk assessment"""
+    try:
+        user_stats = get_user_statistics(user_id)
+        client = openai.OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
+        
+        prompt = f"""Provide a comprehensive risk assessment for this trader:
+        
+        Trading Profile:
+        - Average Return: {user_stats['avg_return']:.1f}%
+        - Total Backtests: {user_stats['total_backtests']}
+        - Total Trades: {user_stats['total_trades']}
+        - Experience Level: {"Advanced" if user_stats['total_trades'] > 100 else "Intermediate" if user_stats['total_trades'] > 50 else "Beginner"}
+        
+        Analyze:
+        1. Current risk level (Low/Medium/High)
+        2. Recommended position sizing
+        3. Portfolio diversification advice
+        4. Risk management improvements
+        5. Warning signs to watch for
+        
+        Be specific with percentages and actionable recommendations."""
+        
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=600
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        return f"❌ Risk Assessment Error: {str(e)}\n\nPlease check your OpenAI configuration."
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # MAIN APPLICATION
 # ──────────────────────────────────────────────────────────────────────────────
