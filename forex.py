@@ -21,8 +21,7 @@ from scipy.signal import find_peaks
 from typing import Dict, List, Optional
 import openai
 import requests
-import asyncio
-import aiohttp
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DATABASE SETUP
