@@ -2153,83 +2153,91 @@ def show_login_page():
         """)
 
 def show_enhanced_main_app():
-    """AI-enhanced professional dashboard with safe session state"""
+    """Main application interface with safe session state handling"""
     
-    # Safety check for session state
-    if 'user' not in st.session_state or not st.session_state.user:
-        st.error("Session expired. Please refresh and login again.")
+    # ✅ ULTRA SAFE SESSION STATE CHECK
+    if ('user' not in st.session_state or 
+        st.session_state.user is None or 
+        not isinstance(st.session_state.user, dict)):
+        
+        st.error("❌ Session expired. Please refresh and login again.")
+        
+        # Reset session state
         st.session_state.authenticated = False
         st.session_state.user = None
+        
         if st.button("🔄 Refresh Page"):
             st.rerun()
         return
     
-    # Professional header with user info and logout
-    col_header1, col_header2, col_header3 = st.columns([2, 1, 1])
+    # Header
+    col1, col2, col3 = st.columns([2, 1, 1])
     
-    with col_header1:
-        st.title("🤖 AI Live Trading Platform")
-        st.caption("AI-Powered Multi-User Trading System with Live Execution")
+    with col1:
+        st.title("🤖 AI Trading Platform")
+        st.caption("Live Trading with AI Strategy Selection")
     
-    with col_header2:
-        username = st.session_state.user.get('username', 'User')
-        email = st.session_state.user.get('email', '')
-        st.write(f"**Welcome, {username}** 🧠")
-        st.caption(f"📧 {email}")
+    with col2:
+        try:
+            username = st.session_state.user.get('username', 'User')
+            st.write(f"**Welcome, {username}** 🧠")
+        except Exception as e:
+            st.write("**Welcome, User** 🧠")
     
-    with col_header3:
-        col_logout1, col_logout2 = st.columns([1, 1])
-        with col_logout1:
-            if st.button("👤 Profile", use_container_width=True):
-                st.session_state.show_profile = True
-        with col_logout2:
-            if st.button("🚪 Logout", use_container_width=True):
-                st.session_state.authenticated = False
-                st.session_state.user = None
-                st.session_state.remember_me = False
-                if 'trading_engines' in st.session_state:
-                    st.session_state.trading_engines.clear()
-                st.query_params.clear()
-                st.rerun()
+    with col3:
+        if st.button("🚪 Logout", use_container_width=True):
+            # Safe logout
+            st.session_state.authenticated = False
+            st.session_state.user = None
+            st.session_state.remember_me = False
+            
+            # Clear trading engines
+            if 'trading_engines' in st.session_state:
+                st.session_state.trading_engines.clear()
+            
+            # Clear query params
+            st.query_params.clear()
+            st.rerun()
     
     st.markdown("---")
     
-    
-    # Enhanced navigation with all tabs
+    # ✅ CORRECT TAB DEFINITION - All 8 tabs
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "📊 **TRADING**",
-    "💼 **SMARTFOLIO**", 
-    "🔍 **X-RAY**",
-    "💎 **GEM DETECTOR**",
-    "🎯 **HARPOON**", 
-    "🚀 **LIVE TRADING**",
-    "🤖 **AI ASSISTANT**",
-    "⚙️ **DASHBOARD**"
-])
+        "📊 **TRADING**",
+        "💼 **SMARTFOLIO**", 
+        "🔍 **X-RAY**",
+        "💎 **GEM DETECTOR**",
+        "🎯 **HARPOON**", 
+        "🚀 **LIVE TRADING**",
+        "🤖 **AI ASSISTANT**",
+        "⚙️ **DASHBOARD**"
+    ])
     
-with tab1:
-    show_enhanced_backtesting()
+    # ✅ CORRECT TAB USAGE - All 8 tabs
+    with tab1:
+        show_enhanced_backtesting()
+    
+    with tab2:
+        show_smartfolio()
+    
+    with tab3:
+        show_xray_analysis()
+    
+    with tab4:
+        show_gem_detector()
+    
+    with tab5:
+        show_harpoon_tracker()
+    
+    with tab6:
+        show_live_trading_system()
+    
+    with tab7:
+        show_ai_assistant()
+    
+    with tab8:
+        show_professional_dashboard()
 
-with tab2:
-    show_smartfolio()
-
-with tab3:
-    show_xray_analysis()
-
-with tab4:
-    show_gem_detector()
-
-with tab5:
-    show_harpoon_tracker()
-
-with tab6:
-    show_live_trading_system()
-
-with tab7:
-    show_ai_assistant()
-
-with tab8:
-    show_professional_dashboard()
 
 def show_enhanced_backtesting():
     """Enhanced backtesting with 23+ strategies"""
@@ -3285,9 +3293,6 @@ def show_professional_dashboard():
     with col_stats3:
         st.metric("Total Trades", platform_stats['total_trades'])
 
-if __name__ == "__main__":
-    main()
-
 def show_smartfolio():
     """Multi-chain portfolio tracker"""
     st.header("💼 SmartFolio - Multi-Chain Portfolio Intelligence")
@@ -3527,3 +3532,8 @@ def show_harpoon_tracker():
     
     df_wallets = pd.DataFrame(top_wallets)
     st.dataframe(df_wallets, use_container_width=True)
+
+if __name__ == "__main__":
+    main()
+
+
