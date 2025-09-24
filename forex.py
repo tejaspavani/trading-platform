@@ -2621,9 +2621,9 @@ def main():
 
 
 def show_login_page():
-    """Professional authentication interface"""
+    """Complete authentication interface"""
     st.title("🤖 AI-Powered Live Trading Platform")
-    st.markdown("### Advanced Multi-User AI Trading System with Live Execution")
+    st.markdown("### Advanced Multi-User AI Trading System with Web3 Intelligence")
     
     tab1, tab2, tab3 = st.tabs(["🔐 Login", "📝 Register", "ℹ️ About"])
     
@@ -2631,18 +2631,10 @@ def show_login_page():
         st.subheader("Login to Your Account")
         
         with st.form("login_form"):
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                username = st.text_input("👤 Username", placeholder="Enter your username")
-                password = st.text_input("🔒 Password", type="password", placeholder="Enter your password")
-                remember_me = st.checkbox("🔄 Keep me logged in", value=True)
-            
-            with col2:
-                st.write("")
-                st.write("")
-                st.write("")
-                submitted = st.form_submit_button("🚀 Login", type="primary", use_container_width=True)
+            username = st.text_input("👤 Username")
+            password = st.text_input("🔒 Password", type="password")
+            remember_me = st.checkbox("🔄 Keep me logged in", value=True)
+            submitted = st.form_submit_button("🚀 Login", type="primary")
             
             if submitted:
                 if username and password:
@@ -2650,7 +2642,6 @@ def show_login_page():
                     if user:
                         st.session_state.authenticated = True
                         st.session_state.user = user
-                        st.session_state.remember_me = remember_me
                         
                         if remember_me:
                             st.query_params['user_token'] = str(user['id'])
@@ -2658,28 +2649,51 @@ def show_login_page():
                         st.success(f"Welcome back, {user['username']}!")
                         st.rerun()
                     else:
-                        st.error("❌ Invalid username or password!")
+                        st.error("❌ Invalid credentials!")
                 else:
-                    st.error("❌ Please fill in both username and password!")
+                    st.error("❌ Please fill in both fields!")
+        
+        # Quick demo login
+        st.markdown("---")
+        st.markdown("**🎯 Quick Demo:**")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🎭 Demo User Login", use_container_width=True):
+                # Create demo user if doesn't exist
+                demo_user = UserManager.authenticate("demo", "demo123")
+                if not demo_user:
+                    UserManager.create_user("demo", "demo@example.com", "demo123")
+                    demo_user = UserManager.authenticate("demo", "demo123")
+                
+                if demo_user:
+                    st.session_state.authenticated = True
+                    st.session_state.user = demo_user
+                    st.success("Demo login successful!")
+                    st.rerun()
+        
+        with col2:
+            if st.button("👑 Admin Login", use_container_width=True):
+                # Create admin user if doesn't exist
+                admin_user = UserManager.authenticate("admin", "admin123")
+                if not admin_user:
+                    UserManager.create_user("admin", "admin@example.com", "admin123")
+                    admin_user = UserManager.authenticate("admin", "admin123")
+                
+                if admin_user:
+                    st.session_state.authenticated = True
+                    st.session_state.user = admin_user
+                    st.success("Admin login successful!")
+                    st.rerun()
     
     with tab2:
         st.subheader("Create New Account")
         
         with st.form("register_form"):
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                new_username = st.text_input("👤 Choose Username", placeholder="Enter desired username")
-                email = st.text_input("📧 Email Address", placeholder="your@email.com")
-                new_password = st.text_input("🔒 Password", type="password", placeholder="Enter secure password")
-                confirm_password = st.text_input("🔒 Confirm Password", type="password", placeholder="Confirm your password")
-            
-            with col2:
-                st.write("")
-                st.write("")
-                st.write("")
-                st.write("")
-                submitted = st.form_submit_button("✨ Create Account", type="primary", use_container_width=True)
+            new_username = st.text_input("👤 Username")
+            email = st.text_input("📧 Email")
+            new_password = st.text_input("🔒 Password", type="password")
+            confirm_password = st.text_input("🔒 Confirm Password", type="password")
+            submitted = st.form_submit_button("✨ Create Account", type="primary")
             
             if submitted:
                 if not all([new_username, email, new_password, confirm_password]):
@@ -2687,51 +2701,43 @@ def show_login_page():
                 elif new_password != confirm_password:
                     st.error("❌ Passwords don't match!")
                 elif len(new_password) < 6:
-                    st.error("❌ Password must be at least 6 characters long!")
-                elif "@" not in email:
-                    st.error("❌ Please enter a valid email address!")
+                    st.error("❌ Password must be at least 6 characters!")
                 else:
                     success, message = UserManager.create_user(new_username, email, new_password)
                     if success:
-                        st.success(f"✅ {message} Please login with your new account.")
+                        st.success(f"✅ {message}")
+                        st.info("You can now login with your new account!")
                     else:
                         st.error(f"❌ {message}")
     
-        with tab3:
-            st.subheader("🚀 Complete AI Trading System")
-        st.markdown("""
-        ### 🎯 **Revolutionary AI Trading Platform Features:**
+    with tab3:
+        st.subheader("🚀 AI Trading Platform Features")
         
-        ✅ **AI Strategy Tournament** - Tests 23+ strategies simultaneously  
-        ✅ **Live Auto-Trading** - AI executes trades automatically  
-        ✅ **Real-Time Explanations** - Detailed reasoning for every decision  
-        ✅ **70+ Trading Symbols** - Major FX, Crypto, Exotics  
-        ✅ **Pattern Recognition** - AI-powered chart analysis  
-        ✅ **Risk Management** - Intelligent position sizing  
-        ✅ **Multi-User System** - Individual accounts with data persistence  
-        ✅ **Mobile Responsive** - Works perfectly on all devices  
+        col1, col2 = st.columns(2)
         
-        ### 🧠 **Advanced AI Features:**
-        - **Strategy Explainer** - Understand why each strategy works
-        - **Market Context Analysis** - Real-time market intelligence
-        - **Automated Signal Generation** - AI creates precise entry/exit points
-        - **Live Trade Execution** - Paper trading with real market data
-        - **Performance Analytics** - Detailed breakdown of all results
-        - **OpenAI Integration** - GPT-4 powered trading insights
+        with col1:
+            st.markdown("""
+            ### 🎯 **Trading Features:**
+            ✅ **AI Strategy Tournament** - 23+ trading strategies  
+            ✅ **Live Trading System** - Paper trading with real data  
+            ✅ **Multi-Asset Support** - Forex, Crypto, DeFi tokens  
+            ✅ **Performance Analytics** - Detailed backtesting results  
+            ✅ **Risk Management** - Advanced position sizing  
+            """)
         
-        ### 📊 **23+ Trading Strategies:**
-        **Trend Following:** Donchian Breakout, MA Crossover, Ichimoku Cloud  
-        **Mean Reversion:** RSI Reversal, Bollinger Bounce, Williams %R  
-        **Momentum:** MACD Momentum, ROC, True Strength Index  
-        **Volatility:** ATR Breakout, Volatility Squeeze, Chaikin Volatility  
+        with col2:
+            st.markdown("""
+            ### 🌐 **Web3 Intelligence:**
+            ✅ **SmartFolio** - Multi-chain portfolio tracking  
+            ✅ **X-Ray Analysis** - Deep token fundamentals  
+            ✅ **Gem Detector** - AI-powered token discovery  
+            ✅ **Harpoon** - Smart money whale tracking  
+            ✅ **Real-time Data** - Live blockchain analytics  
+            """)
         
-        ### 🚀 **Get Started:**
-        1. **Create your account** above
-        2. **AI analyzes** your trading style and performance
-        3. **Run tournaments** to find optimal strategies
-        4. **Let AI execute trades** with full explanations
-        5. **Monitor live performance** with detailed analytics
-        """)
+        st.markdown("---")
+        st.info("🔬 **Educational Platform**: All trading is simulated for learning purposes. Real money trading requires additional setup and regulatory compliance.")
+
 
 def show_enhanced_main_app():
     """Main application interface with safe session state handling"""
