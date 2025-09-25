@@ -4321,61 +4321,81 @@ def show_enhanced_dashboard():
 
 
 def show_smartfolio():
-    """Multi-chain portfolio tracker"""
+    """Complete SmartFolio implementation with error handling"""
     st.header("💼 SmartFolio - Multi-Chain Portfolio Intelligence")
     st.caption("Track and optimize your Web3 portfolio with AI insights")
     
     # Wallet input
     col1, col2 = st.columns([2, 1])
     with col1:
-        wallet_address = st.text_input("🔗 Enter Wallet Address", placeholder="0x... or paste any wallet address")
+        wallet_address = st.text_input("🔗 Enter Wallet Address", placeholder="0x... or paste any Ethereum wallet address")
     with col2:
         chain = st.selectbox("Blockchain", ["Ethereum", "Solana", "Polygon", "Arbitrum"])
     
-    portfolio_manager = Web3PortfolioManager()
-    portfolio = portfolio_manager.get_portfolio_summary()
-    
-    # Portfolio Overview
-    st.subheader("📊 Portfolio Overview")
-    col_a, col_b, col_c, col_d = st.columns(4)
-    
-    col_a.metric("💰 Total Value", f"${portfolio['total_value']:,.2f}", f"+${portfolio['change_24h']:,.2f}")
-    col_b.metric("📈 24h Change", f"+{portfolio['change_24h']/portfolio['total_value']*100:.2f}%", "Bullish")
-    col_c.metric("🎯 Tokens", portfolio['token_count'])
-    col_d.metric("🖼️ NFTs", portfolio['nft_count'])
-    
-    # AI Insights
-    st.subheader("🤖 AI Portfolio Insights")
-    st.success("🟢 **AI Recommendation**: Portfolio shows strong diversification. Consider taking profits in DeFi tokens (+15.4%) and rotating into Layer 2 opportunities.")
-    
-    # Holdings
-    st.subheader("💎 Top Holdings")
-    holdings_data = []
-    for holding in portfolio['top_holdings']:
-        holdings_data.append({
-            "Token": holding['symbol'],
-            "Value": f"${holding['value']:,}",
-            "24h Change": f"+{holding['change']:.1f}%",
-            "Weight": f"{holding['value']/portfolio['total_value']*100:.1f}%"
-        })
-    
-    df_holdings = pd.DataFrame(holdings_data)
-    st.dataframe(df_holdings, use_container_width=True)
-    
-    # DeFi Positions
-    st.subheader("🏦 DeFi Positions")
-    defi_positions = portfolio_manager.get_defi_positions()
-    defi_data = []
-    for pos in defi_positions:
-        defi_data.append({
-            "Protocol": pos['protocol'],
-            "Position": pos['position'], 
-            "Value": f"${pos['value']:,}",
-            "APY": f"{pos['apy']:.1f}%"
-        })
-    
-    df_defi = pd.DataFrame(defi_data)
-    st.dataframe(df_defi, use_container_width=True)
+    try:
+        portfolio_manager = Web3PortfolioManager()
+        portfolio = portfolio_manager.get_portfolio_summary(wallet_address)
+        
+        if portfolio.get('demo_mode', False):
+            st.info(portfolio.get('message', 'Demo mode active'))
+            if 'example' in portfolio:
+                st.write(f"**Example:** {portfolio['example']}")
+            
+            if 'features' in portfolio:
+                st.subheader("🎓 Features Available:")
+                for feature in portfolio['features']:
+                    st.write(f"• {feature}")
+                    
+        elif portfolio.get('error'):
+            st.error(portfolio['error'])
+            
+        else:
+            # Safe access with defaults
+            total_value = float(portfolio.get('total_value', 0))
+            change_24h = float(portfolio.get('change_24h', 0))
+            token_count = int(portfolio.get('token_count', 0))
+            nft_count = int(portfolio.get('nft_count', 0))
+            
+            # Portfolio Overview
+            st.subheader("📊 Portfolio Overview")
+            col_a, col_b, col_c, col_d = st.columns(4)
+            
+            col_a.metric("💰 Total Value", f"${total_value:,.2f}", 
+                        f"+${change_24h:,.2f}" if change_24h != 0 else "No change")
+            col_b.metric("📈 24h Change", 
+                        f"{change_24h/total_value*100:+.2f}%" if total_value > 0 else "0%", 
+                        "Bullish" if change_24h > 0 else "Neutral")
+            col_c.metric("🎯 Tokens", token_count)
+            col_d.metric("🖼️ NFTs", nft_count)
+            
+            # AI Insights
+            st.subheader("🤖 AI Portfolio Insights")
+            st.success("🟢 **AI Recommendation**: Portfolio shows strong diversification. Consider taking profits in DeFi tokens (+15.4%) and rotating into Layer 2 opportunities.")
+            
+            # Holdings
+            top_holdings = portfolio.get('top_holdings', [])
+            if top_holdings:
+                st.subheader("💎 Top Holdings")
+                holdings_data = []
+                for holding in top_holdings:
+                    holdings_data.append({
+                        "Token": holding.get('symbol', 'N/A'),
+                        "Amount": str(holding.get('amount', '0')),
+                        "Value": f"${holding.get('value', 0):,}",
+                        "24h Change": f"{holding.get('change', 0):+.1f}%",
+                        "Weight": f"{holding.get('value', 0)/total_value*100:.1f}%" if total_value > 0 else "0%"
+                    })
+                
+                df_holdings = pd.DataFrame(holdings_data)
+                st.dataframe(df_holdings, use_container_width=True)
+            else:
+                st.info("💡 Enter a wallet address above to see live portfolio data")
+                
+    except Exception as e:
+        st.error(f"⚠️ SmartFolio Error: {str(e)}")
+        st.info("Please refresh the page or try again later.")
+
+
 
 def show_xray_analysis():
     """Token deep analysis"""
