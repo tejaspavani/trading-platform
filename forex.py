@@ -2659,7 +2659,6 @@ def show_login_page():
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🎭 Demo User Login", use_container_width=True):
-                # Create demo user if doesn't exist
                 demo_user = UserManager.authenticate("demo", "demo123")
                 if not demo_user:
                     UserManager.create_user("demo", "demo@example.com", "demo123")
@@ -2673,7 +2672,6 @@ def show_login_page():
         
         with col2:
             if st.button("👑 Admin Login", use_container_width=True):
-                # Create admin user if doesn't exist
                 admin_user = UserManager.authenticate("admin", "admin123")
                 if not admin_user:
                     UserManager.create_user("admin", "admin@example.com", "admin123")
@@ -2736,7 +2734,8 @@ def show_login_page():
             """)
         
         st.markdown("---")
-        st.info("🔬 **Educational Platform**: All trading is simulated for learning purposes. Real money trading requires additional setup and regulatory compliance.")
+        st.info("🔬 **Educational Platform**: All trading is simulated for learning purposes.")
+
 
 
 def show_enhanced_main_app():
@@ -5016,55 +5015,7 @@ def get_trading_engine(user_id):
 # UI FUNCTIONS (SIMPLIFIED PLACEHOLDER VERSIONS)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def show_smartfolio():
-    """SmartFolio placeholder"""
-    st.header("💼 SmartFolio")
-    st.info("🚧 Web3 Portfolio tracking placeholder")
-    
-def show_xray_analysis():
-    """X-Ray placeholder"""  
-    st.header("🔍 X-Ray")
-    st.info("🚧 Token analysis placeholder")
-    
-def show_gem_detector():
-    """Gem Detector placeholder"""
-    st.header("💎 Gem Detector") 
-    st.info("🚧 Token discovery placeholder")
-    
-def show_harpoon_tracker():
-    """Harpoon placeholder"""
-    st.header("🎯 Harpoon")
-    st.info("🚧 Smart money tracking placeholder")
 
-def show_enhanced_backtesting():
-    """Backtesting placeholder"""
-    st.header("📊 Enhanced Backtesting")
-    st.info("🚧 Your existing backtesting system goes here")
-
-def show_live_trading_system():
-    """Live trading placeholder"""
-    st.header("🚀 Live Trading System") 
-    st.info("🚧 Your existing live trading system goes here")
-
-def show_ai_assistant():
-    """AI Assistant placeholder"""
-    st.header("🤖 AI Assistant")
-    st.info("🚧 AI assistant placeholder")
-
-def show_professional_dashboard():
-    """Dashboard placeholder"""
-    st.header("⚙️ Professional Dashboard")
-    st.info("🚧 Dashboard placeholder")
-
-def show_login_page():
-    """Login page placeholder"""
-    st.header("🔐 Login")
-    st.info("🚧 Login system placeholder")
-
-def show_enhanced_main_app():
-    """Main app placeholder"""
-    st.header("🤖 Enhanced Main App")
-    st.info("🚧 Main app placeholder")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # MAIN FUNCTION
@@ -5092,3 +5043,4 @@ if __name__ == "__main__":
     main()
 
 
+# Force refresh Thu Sep 25 10:32:22 +04 2025
