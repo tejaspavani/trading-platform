@@ -2596,7 +2596,7 @@ def main():
     # Chat history
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
-    
+
     # Other states
     if 'run_count' not in st.session_state:
         st.session_state.run_count = 0
@@ -3391,7 +3391,7 @@ except Exception as e:
         st.error(f"Database error: {str(e)}")
 
 def show_ai_assistant():
-    """AI Trading Assistant"""
+    """AI Trading Assistant with safe session state handling"""
     if not st.session_state.user:
         st.error("Please login to access AI Assistant.")
         return
@@ -3399,101 +3399,104 @@ def show_ai_assistant():
     st.header("🤖 AI Trading Assistant")
     st.caption("Your intelligent trading companion - Ask me anything about trading, strategies, or market analysis!")
     
-    # AI Assistant Features
+    # Initialize chat history safely
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    
     col1, col2 = st.columns([2, 1])
     
     with col1:
         st.subheader("💬 Chat with AI")
         
-        # Chat interface
-        chat_container = st.container()
-        
-        with chat_container:
-            # Display chat history
-            if st.session_state.chat_history:
-                for i, message in enumerate(st.session_state.chat_history):
-                    if message["role"] == "user":
-                        st.markdown(f"**🧑‍💻 You:** {message['content']}")
-                    else:
-                        st.markdown(f"**🤖 AI:** {message['content']}")
-            else:
-                st.info("👋 Hello! I'm your AI trading assistant. Ask me anything about trading strategies, market analysis, or performance optimization!")
-        
         # Chat input
         with st.form("chat_form", clear_on_submit=True):
-            col_input, col_send, col_clear = st.columns([6, 1, 1])
-            
+            col_input, col_send = st.columns([5, 1])
             with col_input:
-                user_input = st.text_input("Ask your trading question:", placeholder="e.g., 'What's my best strategy?' or 'Analyze current market conditions'", label_visibility="collapsed")
-            
+                user_input = st.text_input("Ask your trading question", 
+                                         placeholder="e.g., What's my best strategy? or Analyze current market conditions",
+                                         label_visibility="collapsed")
             with col_send:
-                send_clicked = st.form_submit_button("📤")
+                send_clicked = st.form_submit_button("Send", use_container_width=True)
+        
+        # Handle user input
+        if send_clicked and user_input:
+            st.session_state.chat_history.append({"role": "user", "content": user_input})
             
-            with col_clear:
-                if st.form_submit_button("🗑️"):
-                    st.session_state.chat_history = []
-                    st.rerun()
+            # Generate AI response (placeholder)
+            ai_response = f"AI Response: I understand you're asking about '{user_input}'. This is a simulated response. In a full implementation, this would connect to an AI service like OpenAI GPT-4."
             
-            if send_clicked and user_input:
-                # Add user message
-                st.session_state.chat_history.append({"role": "user", "content": user_input})
-                
-                # Get AI response
-                ai_response = get_ai_trading_response(user_input, st.session_state.user['id'])
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
-                st.rerun()
+            st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+            st.rerun()
+        
+        # Display chat history safely
+        if st.session_state.chat_history and len(st.session_state.chat_history) > 0:
+            for i, message in enumerate(st.session_state.chat_history):
+                if message.get("role") == "user":
+                    st.markdown(f"**You:** {message.get('content', '')}")
+                else:
+                    st.markdown(f"**🤖 AI:** {message.get('content', '')}")
+        else:
+            st.info("👋 Hello! I'm your AI trading assistant. Ask me anything about trading strategies, market analysis, or performance optimization!")
     
     with col2:
-        st.subheader("⚡ Quick AI Actions")
+        st.subheader("🚀 Quick AI Actions")
         
         if st.button("📊 Analyze My Performance", use_container_width=True):
-            user_stats = get_user_statistics(st.session_state.user['id'])
-            analysis = f"""📊 **AI Performance Analysis for {st.session_state.user['username']}:**
-            
-**📈 Trading Statistics:**
+            try:
+                user_stats = get_user_statistics(st.session_state.user['id'])
+                analysis = f"""
+**🎯 AI Performance Analysis for {st.session_state.user['username']}**
+
+**Trading Statistics:**
 - Total Backtests: {user_stats['total_backtests']}
 - Total Trades: {user_stats['total_trades']}
 - Average Return: {user_stats['avg_return']:.2f}%
 - Best Return: {user_stats['best_return']:.2f}%
 
-**🤖 AI Insights:**
-{"🟢 **Strong Performance!** You're in the top 20% of traders." if user_stats['avg_return'] > 5 else "🟡 **Developing Well!** Focus on consistency." if user_stats['avg_return'] > 0 else "🔴 **Learning Phase** - Focus on education and small position sizes."}
+**AI Insights:** {"Strong Performance! You're in the top 20% of traders." if user_stats['avg_return'] > 5 else "Developing Well! Focus on consistency."}
 
-**💡 AI Recommendations:**
-- {"Continue with current strategies, consider increasing position sizes" if user_stats['avg_return'] > 5 else "Focus on risk management and strategy refinement" if user_stats['avg_return'] > 0 else "Practice with demo accounts and reduce risk per trade"}"""
-            
-            st.session_state.chat_history.append({"role": "assistant", "content": analysis})
-            st.rerun()
+**AI Recommendations:** {"Continue with current strategies, consider increasing position sizes" if user_stats['avg_return'] > 5 else "Focus on risk management and strategy refinement"}
+"""
+                
+                st.session_state.chat_history.append({"role": "assistant", "content": analysis})
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error analyzing performance: {str(e)}")
         
-        if st.button("💡 AI Strategy Builder", use_container_width=True):
-            st.info("🎯 Go to the Info Center tab for the complete AI Strategy Builder!")
+        if st.button("🎯 AI Strategy Builder", use_container_width=True):
+            st.info("🚧 Go to the Trading tab for the complete AI Strategy Tournament!")
         
         if st.button("📈 Market Intelligence", use_container_width=True):
-            market_analysis = """📈 **AI Market Intelligence Report:**
-            
-**🎯 Current Market Conditions:**
-- **EURUSD**: Consolidating in range 1.0800-1.0900
-- **BTCUSD**: Strong uptrend, approaching resistance at $45,000
-- **GBPUSD**: Bearish sentiment due to economic uncertainty
-- **USDJPY**: Range-bound, waiting for BoJ intervention signals
+            market_analysis = """
+**🌐 AI Market Intelligence Report**
 
-**🤖 AI Predictions (Next 24-48 hours):**
+**Current Market Conditions:**
+- EURUSD: Consolidating in range 1.0800-1.0900
+- BTCUSD: Strong uptrend, approaching resistance at $45,000
+- GBPUSD: Bearish sentiment due to economic uncertainty
+
+**AI Predictions (Next 24-48 hours):**
 - 68% probability of EURUSD breakout (direction uncertain)
 - 73% probability of BTCUSD continued uptrend
 - 61% probability of GBPUSD further decline
 
-**⚠️ Risk Factors:**
-- High-impact news events scheduled for tomorrow
+**Risk Factors:**
+- High-impact news events scheduled
 - Increased volatility expected during NY session
-- Month-end flows may cause unusual price movements
 
-**💡 AI Trading Suggestions:**
+**AI Trading Suggestions:**
 - Reduce position sizes during high-impact news
 - Focus on trend-following strategies in crypto
-- Use wider stops in forex due to increased volatility"""
-            
+- Use wider stops in forex due to increased volatility
+"""
             st.session_state.chat_history.append({"role": "assistant", "content": market_analysis})
             st.rerun()
+        
+        # Clear chat button
+        if st.button("🗑️ Clear Chat History", use_container_width=True):
+            st.session_state.chat_history = []
+            st.rerun()
+
 
 def show_strategy_info_center():
     """Comprehensive strategy information and education center"""
