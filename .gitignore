@@ -1,0 +1,85 @@
+# Directories to ignore completely
+__pycache__/
+logs/
+models/
+notebooks/
+backtesting/
+data/
+runs/
+tests/
+trading/
+utils/
+config/
+
+# Log files
+*.log
+run_*.log
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.py.bak
+
+# Shell scripts (may not work in cloud)
+*.sh
+
+# Python cache and compiled files
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+Miniforge3*/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Sensitive files
+.streamlit/secrets.toml
+*.env
+config.json
+access_token.json
+api_keys.json
+
+# Documentation
+README.md
+*.md
+
+# Jupyter notebooks
+*.ipynb
+
