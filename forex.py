@@ -931,163 +931,160 @@ class BTStats:
     max_dd_pct: float
 
 def backtest_v4(df_in, cfg: StratV4Config, init_equity=10_000.0):
-    df = add_indicators_v4(df_in, cfg)
-    O, H, L, C = df["open"], df["high"], df["low"], df["close"]
+    """Safe backtest function with proper variable scoping"""
+    try:
+        df = add_indicators_v4(df_in, cfg)
+        O, H, L, C = df["open"], df["high"], df["low"], df["close"]
 
-    equity, peak, max_dd = init_equity, init_equity, 0.0
-    open_trades: list[Trade] = []
-    closed: list[Trade] = []
-    cooldown = 0
+        equity, peak, max_dd = init_equity, init_equity, 0.0
+        open_trades: list[Trade] = []
+        closed: list[Trade] = []
+        cooldown = 0
 
-    def _commission(notional):
-        return abs(notional) * (cfg.comm_bp * 1e-4)
+        def _commission(notional):
+            return abs(notional) * (cfg.comm_bp * 1e-4)
 
-    for t in range(max(cfg.wma_len, cfg.macd_slow), len(df)):
-        ts = df.index[t]
-        o, h, l, c = O.iat[t], H.iat[t], L.iat[t], C.iat[t]
-        atr = float(df["_ATR"].iat[t])
-        atr_pct = float(df["_ATRpct"].iat[t])
-        wma = float(df["_WMA"].iat[t])
-        slope = float(df["_WMA_slope"].iat[t])
-        u_prev = float(df["_U"].iat[t])
-        l_prev = float(df["_L"].iat[t])
+        for t in range(max(cfg.wma_len, cfg.macd_slow), len(df)):
+            ts = df.index[t]
+            o, h, l, c = O.iat[t], H.iat[t], L.iat[t], C.iat[t]
+            
+            # Safe indicator access
+            atr = float(df["_ATR"].iat[t]) if not np.isnan(df["_ATR"].iat[t]) else 0.001
+            atr_pct = float(df["_ATRpct"].iat[t]) if not np.isnan(df["_ATRpct"].iat[t]) else 0.001
+            wma = float(df["_WMA"].iat[t]) if not np.isnan(df["_WMA"].iat[t]) else c
+            slope = float(df["_WMA_slope"].iat[t]) if not np.isnan(df["_WMA_slope"].iat[t]) else 0
+            u_prev = float(df["_U"].iat[t]) if not np.isnan(df["_U"].iat[t]) else c
+            l_prev = float(df["_L"].iat[t]) if not np.isnan(df["_L"].iat[t]) else c
 
-        macd_ok = True
-        if cfg.use_macd_filter and not np.isnan(df["_MACD_hist"].iat[t]):
-            macd_ok = df["_MACD"].iat[t] > df["_MACD_signal"].iat[t]
-        rsi_ok = True
-        if cfg.use_rsi_filter and not np.isnan(df["_RSI"].iat[t]):
-            rsi_ok = df["_RSI"].iat[t] >= cfg.rsi_long_min
+            # MACD filter
+            macd_ok = True
+            if cfg.use_macd_filter and "_MACD_hist" in df.columns:
+                if not np.isnan(df["_MACD_hist"].iat[t]):
+                    macd_ok = df["_MACD"].iat[t] > df["_MACD_signal"].iat[t]
+            
+            # RSI filter  
+            rsi_ok = True
+            if cfg.use_rsi_filter and "_RSI" in df.columns:
+                if not np.isnan(df["_RSI"].iat[t]):
+                    rsi_ok = df["_RSI"].iat[t] >= cfg.rsi_long_min
 
- # --- manage open trade ------------------------------------------------
-        if open_trades:
-            tr = open_trades[0]
-            tr.bars_in += 1
+            # ✅ SAFE TRADE MANAGEMENT - Always initialize tr properly
+            if open_trades and len(open_trades) > 0:
+                tr = open_trades[0]  # ✅ Safe assignment
+                tr.bars_in += 1
+                remaining_size = tr.size - tr.partial_size
+                r = abs(tr.entry - tr.init_stop)
 
-            # how much remains after partial exits
+                if r > 0:  # Safety check
+                    curr_r = (h - tr.entry) / r if tr.side == 1 else (tr.entry - l) / r
+                    
+                    # Breakeven
+                    if cfg.breakeven_at_R > 0 and curr_r >= cfg.breakeven_at_R:
+                        tr.stop = max(tr.stop, tr.entry) if tr.side == 1 else min(tr.stop, tr.entry)
+
+                    # Partial exits
+                    if remaining_size > 0 and cfg.partial_at_R > 0 and curr_r >= cfg.partial_at_R:
+                        partial_px = h if tr.side == 1 else l
+                        partial_pnl = cfg.partial_size * tr.size * (partial_px - tr.entry if tr.side == 1 else tr.entry - partial_px) - _commission(cfg.partial_size * tr.size * partial_px)
+                        equity += partial_pnl
+                        tr.partial_size += cfg.partial_size * tr.size
+                        tr.pnl += partial_pnl
+
+                    # Trailing stop
+                    trail_r = 1.5
+                    if curr_r >= trail_r:
+                        tr.stop = max(tr.stop, h - cfg.atr_mult * atr) if tr.side == 1 else min(tr.stop, l + cfg.atr_mult * atr)
+
+                # Exit checks
+                exit_px = None
+                if tr.side == 1:
+                    if l <= tr.stop: exit_px = tr.stop - cfg.slippage
+                    elif h >= tr.tp: exit_px = tr.tp - cfg.slippage
+                else:
+                    if h >= tr.stop: exit_px = tr.stop + cfg.slippage
+                    elif l <= tr.tp: exit_px = tr.tp + cfg.slippage
+
+                # Time-based exit
+                if exit_px is None and tr.bars_in >= cfg.max_bars_in_trade:
+                    exit_px = c - cfg.slippage if tr.side == 1 else c + cfg.slippage
+
+                # Execute exit
+                if exit_px is not None and remaining_size > 0:
+                    pnl_remaining = remaining_size * (exit_px - tr.entry if tr.side == 1 else tr.entry - exit_px) - _commission(remaining_size * exit_px)
+                    tr.pnl += pnl_remaining
+                    equity += pnl_remaining
+                    tr.exit_time, tr.exit_price = ts, exit_px
+                    tr.r_mult = tr.pnl / max(1e-9, init_equity * cfg.risk_per_trade)
+                    closed.append(tr)
+                    open_trades.clear()
+                    peak = max(peak, equity)
+                    max_dd = min(max_dd, (equity / peak - 1.0) * 100)
+
+            # Entry logic
+            if not open_trades and cooldown == 0 and atr > 0:
+                in_vol = not cfg.use_vol_filter or (cfg.atr_pct_min <= atr_pct <= cfg.atr_pct_max)
+                uptrend = not cfg.use_trend_filter or (c > wma and slope > 0)
+                long_signal = in_vol and uptrend and macd_ok and rsi_ok and (c >= u_prev + cfg.breakout_buffer_atr * atr)
+
+                if long_signal:
+                    side = 1
+                    entry = c + cfg.slippage
+                    stop = entry - cfg.atr_mult * atr
+                    tp = entry + cfg.rr * (entry - stop)
+
+                    risk_cash = equity * cfg.risk_per_trade
+                    per_unit_risk = entry - stop
+                    size = risk_cash / per_unit_risk if per_unit_risk > 0 else 0
+
+                    if size > 0:
+                        equity -= _commission(size * entry)
+                        open_trades.append(Trade(
+                            entry_time=ts, side=side, entry=entry, stop=stop, tp=tp,
+                            size=size, init_stop=stop, bars_in=0
+                        ))
+
+            if cooldown > 0: 
+                cooldown -= 1
+
+        # ✅ SAFE FINAL EXIT - Check if trades exist
+        if open_trades and len(open_trades) > 0:
+            tr = open_trades[0]  # ✅ Safe assignment
+            last_c = C.iat[-1]
+            exit_px = last_c - cfg.slippage if tr.side == 1 else last_c + cfg.slippage
             remaining_size = tr.size - tr.partial_size
-
-            # 1R distance (fixed at entry vs initial stop)
-            r = abs(tr.entry - tr.init_stop)
-
-            # Always define curr_r safely
-            curr_r = 0.0
-            if r > 0:
-                # use current bar's high/low to measure best favorable excursion
-                curr_r = (h - tr.entry) / r if tr.side == 1 else (tr.entry - l) / r
-
-            # breakeven move
-            if cfg.breakeven_at_R > 0 and curr_r >= cfg.breakeven_at_R:
-                tr.stop = max(tr.stop, tr.entry) if tr.side == 1 else min(tr.stop, tr.entry)
-
-            # partial exits
-            if remaining_size > 0 and cfg.partial_at_R > 0 and curr_r >= cfg.partial_at_R:
-                partial_px = h if tr.side == 1 else l
-                partial_qty = cfg.partial_size * tr.size
-                # realize PnL on the partial
-                partial_pnl = partial_qty * (
-                    (partial_px - tr.entry) if tr.side == 1 else (tr.entry - partial_px)
-                ) - _commission(partial_qty * partial_px)
-                equity += partial_pnl
-                tr.partial_size += partial_qty
-                tr.pnl += partial_pnl
-                remaining_size = tr.size - tr.partial_size  # update after partial
-
-            # trailing stop once trade reaches a threshold in R
-            trail_r = 1.5
-            if curr_r >= trail_r:
-                tr.stop = (
-                    max(tr.stop, h - cfg.atr_mult * atr)
-                    if tr.side == 1
-                    else min(tr.stop, l + cfg.atr_mult * atr)
-                )
-
-            # exit checks (stop / take-profit / time)
-            exit_px = None
-            if tr.side == 1:
-                if l <= tr.stop:
-                    exit_px = tr.stop - cfg.slippage
-                elif h >= tr.tp:
-                    exit_px = tr.tp - cfg.slippage
-            else:
-                if h >= tr.stop:
-                    exit_px = tr.stop + cfg.slippage
-                elif l <= tr.tp:
-                    exit_px = tr.tp + cfg.slippage
-
-            if exit_px is None and tr.bars_in >= cfg.max_bars_in_trade:
-                exit_px = c - cfg.slippage if tr.side == 1 else c + cfg.slippage
-
-            if exit_px is not None and remaining_size > 0:
-                pnl_remaining = remaining_size * (
-                    (exit_px - tr.entry) if tr.side == 1 else (tr.entry - exit_px)
-                ) - _commission(remaining_size * exit_px)
+            if remaining_size > 0:
+                pnl_remaining = remaining_size * (exit_px - tr.entry if tr.side == 1 else tr.entry - exit_px) - _commission(remaining_size * exit_px)
                 tr.pnl += pnl_remaining
                 equity += pnl_remaining
-                tr.exit_time, tr.exit_price = ts, exit_px
-                tr.r_mult = tr.pnl / (init_equity * cfg.risk_per_trade)
-                closed.append(tr)
-                open_trades.clear()
-                peak = max(peak, equity)
-                max_dd = min(max_dd, (equity / peak - 1.0) * 100)
+            tr.exit_time, tr.exit_price = df.index[-1], exit_px
+            tr.r_mult = tr.pnl / max(1e-9, init_equity * cfg.risk_per_trade)
+            closed.append(tr)
+            peak = max(peak, equity)
+            max_dd = min(max_dd, (equity / peak - 1.0) * 100)
 
-        # --- new entries ------------------------------------------------------
-        if not open_trades and cooldown == 0 and not np.isnan(atr) and atr > 0:
-            in_vol = (not cfg.use_vol_filter) or (cfg.atr_pct_min <= atr_pct <= cfg.atr_pct_max)
-            uptrend = (not cfg.use_trend_filter) or (c > wma and slope > 0)
-            long_signal = in_vol and uptrend and macd_ok and rsi_ok and (
-                c >= u_prev + cfg.breakout_buffer_atr * atr
-            )
+        # Calculate statistics
+        wins = [t for t in closed if t.pnl > 0]
+        losses = [t for t in closed if t.pnl <= 0]
+        gross_win = sum(t.pnl for t in wins)
+        gross_loss = abs(sum(t.pnl for t in losses))
+        pf = gross_win / gross_loss if gross_loss > 0 else float('inf') if gross_win > 0 else 0.0
+        wr = len(wins) / len(closed) * 100 if closed else 0.0
+        exp = (gross_win - gross_loss) / len(closed) if closed else 0.0
 
-            if long_signal:
-                side = 1
-                entry = c + cfg.slippage
-                stop = entry - cfg.atr_mult * atr
-                tp = entry + cfg.rr * (entry - stop)
+        stats = BTStats(
+            init_eq=init_equity, final_eq=equity, ret_pct=(equity / init_equity - 1.0) * 100,
+            n_trades=len(closed), win_rate=wr, pf=pf, exp_per_trade=exp, max_dd_pct=max_dd
+        )
+        return stats, closed
 
-                risk_cash = equity * cfg.risk_per_trade
-                per_unit_risk = entry - stop
-                size = risk_cash / per_unit_risk if per_unit_risk > 0 else 0.0
+    except Exception as e:
+        # Return safe default values on error
+        stats = BTStats(
+            init_eq=init_equity, final_eq=init_equity, ret_pct=0.0,
+            n_trades=0, win_rate=0.0, pf=0.0, exp_per_trade=0.0, max_dd_pct=0.0
+        )
+        return stats, []
 
-                if size > 0:
-                    equity -= _commission(size * entry)
-                    open_trades.append(Trade(
-                        entry_time=ts, side=side, entry=entry, stop=stop, tp=tp,
-                        size=size, init_stop=stop, bars_in=0
-                    ))
-
-        # --- cooldown ---------------------------------------------------------
-        if cooldown > 0:
-            cooldown -= 1
-
-        if open_trades:
-            tr = open_trades[0]
-        last_c = C.iat[-1]
-        exit_px = last_c - cfg.slippage if tr.side == 1 else last_c + cfg.slippage
-        remaining_size = tr.size - tr.partial_size
-        if remaining_size > 0:
-            pnl_remaining = remaining_size * (exit_px - tr.entry if tr.side == 1 else tr.entry - exit_px) - _commission(remaining_size * exit_px)
-            tr.pnl += pnl_remaining
-            equity += pnl_remaining
-        tr.exit_time, tr.exit_price = df.index[-1], exit_px
-        tr.r_mult = tr.pnl / max(1e-9, init_equity * cfg.risk_per_trade)
-        closed.append(tr)
-        peak = max(peak, equity)
-        max_dd = min(max_dd, (equity / peak - 1.0) * 100)
-
-    wins = [t for t in closed if t.pnl > 0]
-    losses = [t for t in closed if t.pnl <= 0]
-    gross_win = sum(t.pnl for t in wins)
-    gross_loss = abs(sum(t.pnl for t in losses))
-    pf = gross_win / gross_loss if gross_loss > 0 else float('inf') if gross_win > 0 else 0.0
-    wr = len(wins) / len(closed) * 100 if closed else 0.0
-    exp = (gross_win - gross_loss) / len(closed) if closed else 0.0
-
-    stats = BTStats(
-        init_eq=init_equity, final_eq=equity, ret_pct=(equity / init_equity - 1.0) * 100,
-        n_trades=len(closed), win_rate=wr, pf=pf, exp_per_trade=exp, max_dd_pct=max_dd
-    )
-    return stats, closed
 
 def _price_fig_with_trades(df: pd.DataFrame, trades: list[Trade], symbol: str, show_ma=True) -> go.Figure:
     cols = {}
