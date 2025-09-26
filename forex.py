@@ -22,6 +22,17 @@ from typing import Dict, List, Optional
 import openai
 import requests
 
+def _ensure_session_keys():
+    defaults = {
+        "authenticated": False,
+        "user": None,
+        "remember_me": False,
+        "trading_engines": {},
+        "chat_history": [],
+        "run_count": 0,
+    }
+    for k, v in defaults.items():
+        st.session_state.setdefault(k, v)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DATABASE SETUP
@@ -618,16 +629,14 @@ def _fetch_crypto_ohlcv(symbol: str, days: int, interval_min: int) -> pd.DataFra
 
 @st.cache_data(ttl=5)
 def get_live_price(symbol):
-    """Get most recent price data"""
     try:
-        if symbol.endswith("-USD"):
-            ticker = yf.Ticker(symbol)
-            data = ticker.history(period="1d", interval="1m")
+        if symbol.endswith("-USD") or symbol in CRYPTO_MAP or _is_crypto(symbol):
+            yf_symbol = CRYPTO_MAP.get(symbol, symbol if symbol.endswith("-USD") else symbol.replace("USD", "-USD"))
+            data = yf.Ticker(yf_symbol).history(period="1d", interval="1m")
             return data.tail(60)
         else:
-            fx_symbol = symbol[:3] + "=X"
-            ticker = yf.Ticker(fx_symbol)
-            data = ticker.history(period="1d", interval="5m") 
+            fx_symbol = f"{symbol}=X"   # EURUSD -> EURUSD=X
+            data = yf.Ticker(fx_symbol).history(period="1d", interval="5m")
             return data.tail(60)
     except:
         return pd.DataFrame()
@@ -655,36 +664,66 @@ class EnhancedDataHandler:
         except Exception as e:
             return self._generate_fallback_data(symbol)
     
-    def _fetch_yahoo_data(self, symbol):
-        """Enhanced Yahoo Finance fetching"""
+def _fetch_yahoo_data(self, symbol: str):
+    """Fetch latest price data from Yahoo Finance; fall back to demo if needed."""
+    try:
+        # --- normalize symbol to Yahoo ticker ---
+        s = symbol.upper().strip()
+
+        if s in CRYPTO_MAP:
+            # e.g., BTCUSD -> BTC-USD
+            yf_symbol = CRYPTO_MAP[s]
+        elif s.endswith("-USD"):
+            # already a Yahoo crypto ticker
+            yf_symbol = s
+        elif s.endswith("USD") and len(s) >= 6:
+            # e.g., BTCUSD -> BTC-USD
+            base = s[:-3]
+            yf_symbol = f"{base}-USD"
+        elif len(s) == 6:
+            # e.g., EURUSD -> EURUSD=X (Yahoo FX)
+            yf_symbol = f"{s}=X"
+        else:
+            # generic FX fallback
+            yf_symbol = f"{s}=X"
+
+        ticker = yf.Ticker(yf_symbol)
+        # try 1m first; if provider rejects, fall back to 5m
         try:
-            if symbol.endswith('USD'):  # Crypto
-                yf_symbol = symbol.replace('USD', '-USD')
-            else:  # Forex
-                yf_symbol = symbol[:3] + '=X'
-            
-            ticker = yf.Ticker(yf_symbol)
             data = ticker.history(period="1d", interval="1m")
-            
-            if not data.empty:
-                current_price = float(data['Close'].iloc[-1])
-                previous_price = float(data['Close'].iloc[-2]) if len(data) > 1 else current_price
-                
-                return {
-                    'symbol': symbol,
-                    'price': current_price,
-                    'change': current_price - previous_price,
-                    'change_pct': ((current_price / previous_price) - 1) * 100 if previous_price != 0 else 0,
-                    'volume': float(data['Volume'].iloc[-1]) if 'Volume' in data else 0,
-                    'high_24h': float(data['High'].max()),
-                    'low_24h': float(data['Low'].min()),
-                    'timestamp': datetime.now(),
-                    'source': 'yahoo_finance',
-                    'status': 'live'
-                }
+        except Exception:
+            data = ticker.history(period="1d", interval="5m")
+
+        if data is None or data.empty:
             return self._generate_fallback_data(symbol)
-        except Exception as e:
-            return self._generate_fallback_data(symbol)
+
+        # yfinance columns are case‑sensitive: 'Open','High','Low','Close','Volume'
+        current_price = float(data["Close"].iloc[-1])
+        previous_price = float(data["Close"].iloc[-2]) if len(data) > 1 else current_price
+
+        high_24h = float(data["High"].max()) if "High" in data else float(data["Close"].max())
+        low_24h  = float(data["Low"].min())  if "Low"  in data else float(data["Close"].min())
+        volume   = float(data["Volume"].iloc[-1]) if "Volume" in data else 0.0
+
+        change = current_price - previous_price
+        change_pct = (change / previous_price) * 100 if previous_price else 0.0
+
+        return {
+            "symbol": symbol,
+            "price": current_price,
+            "change": change,
+            "change_pct": change_pct,
+            "volume": volume,
+            "high_24h": high_24h,
+            "low_24h": low_24h,
+            "timestamp": datetime.now(),
+            "source": "yahoo_finance",
+            "status": "live",
+        }
+
+    except Exception:
+        # any parsing/network error → safe fallback
+        return self._generate_fallback_data(symbol)
     
     def _generate_fallback_data(self, symbol):
         """Generate realistic demo data when APIs fail"""
@@ -920,41 +959,69 @@ def backtest_v4(df_in, cfg: StratV4Config, init_equity=10_000.0):
         if cfg.use_rsi_filter and not np.isnan(df["_RSI"].iat[t]):
             rsi_ok = df["_RSI"].iat[t] >= cfg.rsi_long_min
 
+ # --- manage open trade ------------------------------------------------
         if open_trades:
             tr = open_trades[0]
             tr.bars_in += 1
+
+            # how much remains after partial exits
             remaining_size = tr.size - tr.partial_size
+
+            # 1R distance (fixed at entry vs initial stop)
             r = abs(tr.entry - tr.init_stop)
 
-            if cfg.breakeven_at_R > 0 and r > 0:
+            # Always define curr_r safely
+            curr_r = 0.0
+            if r > 0:
+                # use current bar's high/low to measure best favorable excursion
                 curr_r = (h - tr.entry) / r if tr.side == 1 else (tr.entry - l) / r
-                if curr_r >= cfg.breakeven_at_R:
-                    tr.stop = max(tr.stop, tr.entry) if tr.side == 1 else min(tr.stop, tr.entry)
 
+            # breakeven move
+            if cfg.breakeven_at_R > 0 and curr_r >= cfg.breakeven_at_R:
+                tr.stop = max(tr.stop, tr.entry) if tr.side == 1 else min(tr.stop, tr.entry)
+
+            # partial exits
             if remaining_size > 0 and cfg.partial_at_R > 0 and curr_r >= cfg.partial_at_R:
                 partial_px = h if tr.side == 1 else l
-                partial_pnl = cfg.partial_size * tr.size * (partial_px - tr.entry if tr.side == 1 else tr.entry - partial_px) - _commission(cfg.partial_size * tr.size * partial_px)
+                partial_qty = cfg.partial_size * tr.size
+                # realize PnL on the partial
+                partial_pnl = partial_qty * (
+                    (partial_px - tr.entry) if tr.side == 1 else (tr.entry - partial_px)
+                ) - _commission(partial_qty * partial_px)
                 equity += partial_pnl
-                tr.partial_size += cfg.partial_size * tr.size
+                tr.partial_size += partial_qty
                 tr.pnl += partial_pnl
+                remaining_size = tr.size - tr.partial_size  # update after partial
 
+            # trailing stop once trade reaches a threshold in R
             trail_r = 1.5
             if curr_r >= trail_r:
-                tr.stop = max(tr.stop, h - cfg.atr_mult * atr) if tr.side == 1 else min(tr.stop, l + cfg.atr_mult * atr)
+                tr.stop = (
+                    max(tr.stop, h - cfg.atr_mult * atr)
+                    if tr.side == 1
+                    else min(tr.stop, l + cfg.atr_mult * atr)
+                )
 
+            # exit checks (stop / take-profit / time)
             exit_px = None
             if tr.side == 1:
-                if l <= tr.stop: exit_px = tr.stop - cfg.slippage
-                elif h >= tr.tp: exit_px = tr.tp - cfg.slippage
+                if l <= tr.stop:
+                    exit_px = tr.stop - cfg.slippage
+                elif h >= tr.tp:
+                    exit_px = tr.tp - cfg.slippage
             else:
-                if h >= tr.stop: exit_px = tr.stop + cfg.slippage
-                elif l <= tr.tp: exit_px = tr.tp + cfg.slippage
+                if h >= tr.stop:
+                    exit_px = tr.stop + cfg.slippage
+                elif l <= tr.tp:
+                    exit_px = tr.tp + cfg.slippage
 
             if exit_px is None and tr.bars_in >= cfg.max_bars_in_trade:
                 exit_px = c - cfg.slippage if tr.side == 1 else c + cfg.slippage
 
             if exit_px is not None and remaining_size > 0:
-                pnl_remaining = remaining_size * (exit_px - tr.entry if tr.side == 1 else tr.entry - exit_px) - _commission(remaining_size * exit_px)
+                pnl_remaining = remaining_size * (
+                    (exit_px - tr.entry) if tr.side == 1 else (tr.entry - exit_px)
+                ) - _commission(remaining_size * exit_px)
                 tr.pnl += pnl_remaining
                 equity += pnl_remaining
                 tr.exit_time, tr.exit_price = ts, exit_px
@@ -964,10 +1031,13 @@ def backtest_v4(df_in, cfg: StratV4Config, init_equity=10_000.0):
                 peak = max(peak, equity)
                 max_dd = min(max_dd, (equity / peak - 1.0) * 100)
 
+        # --- new entries ------------------------------------------------------
         if not open_trades and cooldown == 0 and not np.isnan(atr) and atr > 0:
-            in_vol = not cfg.use_vol_filter or (cfg.atr_pct_min <= atr_pct <= cfg.atr_pct_max)
-            uptrend = not cfg.use_trend_filter or (c > wma and slope > 0)
-            long_signal = in_vol and uptrend and macd_ok and rsi_ok and (c >= u_prev + cfg.breakout_buffer_atr * atr)
+            in_vol = (not cfg.use_vol_filter) or (cfg.atr_pct_min <= atr_pct <= cfg.atr_pct_max)
+            uptrend = (not cfg.use_trend_filter) or (c > wma and slope > 0)
+            long_signal = in_vol and uptrend and macd_ok and rsi_ok and (
+                c >= u_prev + cfg.breakout_buffer_atr * atr
+            )
 
             if long_signal:
                 side = 1
@@ -977,7 +1047,7 @@ def backtest_v4(df_in, cfg: StratV4Config, init_equity=10_000.0):
 
                 risk_cash = equity * cfg.risk_per_trade
                 per_unit_risk = entry - stop
-                size = risk_cash / per_unit_risk if per_unit_risk > 0 else 0
+                size = risk_cash / per_unit_risk if per_unit_risk > 0 else 0.0
 
                 if size > 0:
                     equity -= _commission(size * entry)
@@ -986,10 +1056,12 @@ def backtest_v4(df_in, cfg: StratV4Config, init_equity=10_000.0):
                         size=size, init_stop=stop, bars_in=0
                     ))
 
-        if cooldown > 0: cooldown -= 1
+        # --- cooldown ---------------------------------------------------------
+        if cooldown > 0:
+            cooldown -= 1
 
-    if open_trades:
-        tr = open_trades[0]
+        if open_trades:
+            tr = open_trades[0]
         last_c = C.iat[-1]
         exit_px = last_c - cfg.slippage if tr.side == 1 else last_c + cfg.slippage
         remaining_size = tr.size - tr.partial_size
@@ -2574,76 +2646,6 @@ def create_dummy_engine():
 def main():
     st.set_page_config(page_title="🤖 AI Trading Platform", layout="wide")
     
-    # EMERGENCY FIX - Override problematic functions
-    def safe_xray_analysis():
-        """Safe X-Ray Analysis - Emergency Fix"""
-        st.header("🔍 X-Ray Token Analysis")
-        st.caption("Deep learning powered token evaluation with AI precision")
-        
-        col1, col2 = st.columns([1, 3])
-        
-        with col1:
-            token_input = st.text_input("🎯 Token Symbol", placeholder="BTC, ETH, DOGE...")
-            
-            if st.button("🔍 ANALYZE TOKEN", type="primary"):
-                if token_input:
-                    st.session_state.xray_analysis = {
-                        'token': token_input.upper(),
-                        'data': {
-                            'overall_rating': 75,
-                            'security_score': 85,
-                            'on_chain_health': 70,
-                            'social_sentiment': 80,
-                            'real_data': True,
-                            'market_cap': 1000000000,
-                            'volume_24h': 50000000,
-                            'price_change_24h': 2.5,
-                            'risk_level': 'Medium',
-                            'growth_potential': 'High'
-                        }
-                    }
-                    st.rerun()
-        
-        with col2:
-            if hasattr(st.session_state, 'xray_analysis'):
-                analysis = st.session_state.xray_analysis
-                token = analysis.get('token', 'Unknown')
-                data = analysis.get('data', {})
-                
-                st.success(f"🎯 **Analysis Complete**: {token}")
-                
-                rating = data.get('overall_rating', 0)
-                if rating >= 80:
-                    st.success(f"🟢 **AI Rating: {rating}/100** - Excellent Investment Opportunity")
-                elif rating >= 60:
-                    st.info(f"🔵 **AI Rating: {rating}/100** - Good Potential, Moderate Risk")
-                else:
-                    st.warning(f"🟡 **AI Rating: {rating}/100** - High Risk, Proceed with Caution")
-                
-                col_x, col_y, col_z = st.columns(3)
-                col_x.metric("🔒 Security", f"{data.get('security_score', 0)}/100")
-                col_y.metric("📊 On-Chain", f"{data.get('on_chain_health', 0)}/100") 
-                col_z.metric("📱 Sentiment", f"{data.get('social_sentiment', 0)}/100")
-                
-                st.subheader("📊 Demo Market Data")
-                col_market1, col_market2, col_market3 = st.columns(3)
-                col_market1.metric("💰 Market Cap", f"${data.get('market_cap', 0):,.0f}")
-                col_market2.metric("📈 24h Volume", f"${data.get('volume_24h', 0):,.0f}")
-                col_market3.metric("📊 24h Change", f"{data.get('price_change_24h', 0):+.2f}%")
-                
-                risk_level = data.get('risk_level', 'Unknown')
-                growth_potential = data.get('growth_potential', 'Unknown')
-                
-                st.write(f"⚠️ **Risk Level:** {risk_level}")
-                st.write(f"🚀 **Growth Potential:** {growth_potential}")
-            else:
-                st.info("👆 Enter a token symbol to begin comprehensive AI analysis")
-    
-    # Override the problematic function
-    import sys
-    current_module = sys.modules[__name__]
-    current_module.show_xray_analysis = safe_xray_analysis
-    
     # Initialize database
     setup_database()
     
@@ -2655,14 +2657,12 @@ def main():
     
     # Show login or main app
     if not st.session_state.authenticated:
-        show_login_page()
+        show_working_login_page()  # Call the working version
     else:
         show_enhanced_main_app()
 
-
-
-def show_login_page():
-    """Complete authentication interface"""
+def show_working_login_page():
+    """Single working login page - no duplicates"""
     st.title("🤖 AI-Powered Live Trading Platform")
     st.markdown("### Advanced Multi-User AI Trading System with Web3 Intelligence")
     
@@ -2699,7 +2699,7 @@ def show_login_page():
         st.markdown("**🎯 Quick Demo:**")
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("🎭 Demo User Login", use_container_width=True):
+            if st.button("🎭 Demo User Login", width="stretch"):
                 demo_user = UserManager.authenticate("demo", "demo123")
                 if not demo_user:
                     UserManager.create_user("demo", "demo@example.com", "demo123")
@@ -2712,7 +2712,7 @@ def show_login_page():
                     st.rerun()
         
         with col2:
-            if st.button("👑 Admin Login", use_container_width=True):
+            if st.button("👑 Admin Login", width="stretch"):
                 admin_user = UserManager.authenticate("admin", "admin123")
                 if not admin_user:
                     UserManager.create_user("admin", "admin@example.com", "admin123")
@@ -2776,6 +2776,7 @@ def show_login_page():
         
         st.markdown("---")
         st.info("🔬 **Educational Platform**: All trading is simulated for learning purposes.")
+
 
 
 
@@ -3297,132 +3298,6 @@ def show_live_trading_system():
         if st.button("🔄 Refresh Page", key="refresh_page_btn_unique"):
             st.rerun()
 
-
-
-            
-
-# Manual controls
-st.markdown("**⚙️ Manual Controls**")
-if st.button("🔴 Close All Positions", use_container_width=True):
-    try:
-        if hasattr(engine, 'positions') and engine.positions:
-            positions_to_close = list(engine.positions.keys())
-            for symbol_pos in positions_to_close:
-                engine._close_position(symbol_pos, "Manual Close All")
-            st.success(f"✅ {len(positions_to_close)} positions closed!")
-        else:
-            st.info("ℹ️ No positions to close.")
-        st.rerun()
-    except Exception as e:
-        st.error(f"Error closing positions: {str(e)}")
-    
-    with col_right:
-        # Display analysis results
-        if hasattr(st.session_state, 'live_analysis'):
-            analysis = st.session_state.live_analysis
-            
-            st.success(f"🎯 **AI Selected Strategy:** {analysis['results'][0]['strategy']}")
-            
-            # Strategy performance metrics
-            winner = analysis['results'][0]
-            col_a, col_b, col_c = st.columns(3)
-            col_a.metric("🏆 AI Score", f"{winner['ai_score']:.1f}/100")
-            col_b.metric("📈 Return", f"{winner['return']:.1f}%")
-            col_c.metric("🎯 Win Rate", f"{winner['win_rate']:.1f}%")
-            
-            # Market context
-            context = analysis['market_context']
-            st.info(f"""
-            **🌍 Current Market Context:**
-            • **Trend:** {context['trend'].replace('_', ' ').title()}
-            • **Volatility:** {context['volatility'].title()} ({context['volatility_value']:.2f}%)
-            • **Risk Sentiment:** {context['risk_sentiment']}
-            """)
-            
-            # Generate trading signal
-            if st.button("⚡ Generate Trading Signal", use_container_width=True):
-                # Create trading signal based on analysis
-                current_price = context['current_price']
-                
-                # Determine signal based on strategy type
-                if winner['category'] in ['Trend Following', 'Momentum']:
-                    action = "BUY" if context['trend'] in ['strong_up', 'weak_up'] else "SELL"
-                else:  # Mean reversion
-                    action = "BUY" if context['current_price'] < context['ma_20'] else "SELL"
-                
-                # Calculate stop loss and take profit
-                volatility_buffer = current_price * (context['volatility_value'] / 100) * 2
-                if action == "BUY":
-                    stop_loss = current_price - volatility_buffer
-                    take_profit = current_price + (volatility_buffer * 2)
-                else:
-                    stop_loss = current_price + volatility_buffer  
-                    take_profit = current_price - (volatility_buffer * 2)
-                
-                # Create and execute signal
-                signal = TradeSignal(
-                    symbol=analysis['symbol'],
-                    action=action,
-                    size=1000,  # Will be calculated by engine
-                    price=current_price,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                    strategy_name=winner['strategy'],
-                    confidence=winner['ai_score'] / 100,
-                    reasoning=f"AI selected best strategy with {winner['ai_score']:.1f}/100 confidence",
-                    timestamp=datetime.now()
-                )
-                
-                # Add signal to trading engine
-                engine.add_signal(signal)
-                
-                st.success(f"🚀 **{action} Signal Generated!**")
-                st.write(f"**Price:** ${current_price:.4f}")
-                st.write(f"**Stop Loss:** ${stop_loss:.4f}")
-                st.write(f"**Take Profit:** ${take_profit:.4f}")
-                st.write(f"**Confidence:** {winner['ai_score']:.1f}/100")
-        
-        else:
-            st.info("👆 Click 'Analyze & Execute Best Strategy' to get AI-powered trading signals!")
-    
-    # Current Positions
-try:
-    if hasattr(engine, 'positions') and engine.positions:
-        st.subheader("📊 Current Positions")
-        
-        positions_data = []
-        for pos_key, pos in engine.positions.items():
-            positions_data.append({
-                'Symbol': pos.symbol,
-                'Side': 'LONG' if pos.side == 1 else 'SHORT',
-                'Size': f"{pos.size:.2f}",
-                'Entry': f"${pos.entry_price:.4f}",
-                'Current': f"${pos.current_price:.4f}",
-                'P&L': f"${pos.pnl:.2f}",
-                'Strategy': pos.strategy_name,
-                'Time': pos.entry_time.strftime('%H:%M:%S')
-            })
-        
-        df_positions = pd.DataFrame(positions_data)
-        st.dataframe(df_positions, use_container_width=True)
-    else:
-        st.info("📊 No active positions.")
-except Exception as e:
-    st.error(f"Error displaying positions: {str(e)}")
-    
-    # Trading History
-    st.subheader("📈 Recent Trading Activity")
-    
-    try:
-        conn = sqlite3.connect('trading_platform.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT symbol, side, size, entry_price, strategy_name, confidence, entry_time, status, pnl
-            FROM live_trades 
-            WHERE user_id = ? 
-            ORDER BY entry_time DESC 
-            LIMIT 10
-        ''', (st.session_state.user['id'],))
         
         trades = cursor.fetchall()
         conn.close()
@@ -4461,86 +4336,77 @@ def show_smartfolio():
 
 
 def show_xray_analysis():
-    """Complete X-Ray token analysis with safe data handling"""
+    """Token deep analysis – safe, complete version with risk/growth lines"""
     st.header("🔍 X-Ray Token Analysis")
     st.caption("Deep learning powered token evaluation with AI precision")
-    
+
     col1, col2 = st.columns([1, 3])
-    
+
+    # ── Left: input / action
     with col1:
-        token_input = st.text_input("🎯 Token Symbol", placeholder="BTC, ETH, DOGE, PEPE...")
-        
-        if st.button("🔍 **ANALYZE TOKEN**", type="primary", width="stretch"):
+        token_input = st.text_input("🎯 Token Symbol", placeholder="ETH, BTC, PEPE…")
+
+        if st.button("🔍 **ANALYZE TOKEN**", type="primary", use_container_width=True):
             if token_input:
-                try:
-                    analyzer = TokenAnalyzer()
-                    
-                    with st.spinner("🤖 AI analyzing token with real market data..."):
-                        analysis = analyzer.analyze_token(token_input)
-                    
-                    st.session_state.xray_analysis = {
-                        'token': token_input.upper(),
-                        'data': analysis
-                    }
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Analysis error: {str(e)}")
-    
+                analyzer = TokenAnalyzer()   # make sure you keep the REAL TokenAnalyzer class
+                data = analyzer.analyze_token(token_input)
+
+                st.session_state.xray_analysis = {
+                    "token": token_input.upper(),
+                    "data": data
+                }
+                st.rerun()
+
+    # ── Right: results
     with col2:
-        if hasattr(st.session_state, 'xray_analysis'):
-            analysis = st.session_state.xray_analysis
-            token = analysis.get('token', 'Unknown')
-            data = analysis.get('data', {})
-            
-            if data.get('error'):
-                st.error(f"❌ {data['error']}")
-                st.info("💡 Try tokens like: BTC, ETH, DOGE, ADA, SOL, MATIC, LINK")
+        analysis = st.session_state.get("xray_analysis")
+        if not analysis:
+            st.info("👆 Enter a token symbol and click **ANALYZE TOKEN** to see the report.")
+            return
+
+        token = analysis["token"]
+        data = analysis["data"]
+
+        if isinstance(data, dict) and data.get("error"):
+            st.error(data["error"])
+            return
+
+        st.success(f"🎯 **Analysis Complete**: {token}")
+
+        # AI rating banner (optional)
+        rating = data.get("overall_rating")
+        if isinstance(rating, (int, float)):
+            if rating > 80:
+                st.success(f"🟢 **AI Rating: {rating}/100** – Excellent")
+            elif rating > 60:
+                st.info(f"🔵 **AI Rating: {rating}/100** – Good / Moderate risk")
             else:
-                st.success(f"🎯 **Analysis Complete**: {token}")
-                
-                # SAFE AI Rating access
-                rating = data.get('overall_rating', 0)
-                if rating >= 80:
-                    st.success(f"🟢 **AI Rating: {rating}/100** - Excellent Investment Opportunity")
-                elif rating >= 60:
-                    st.info(f"🔵 **AI Rating: {rating}/100** - Good Potential, Moderate Risk")
-                else:
-                    st.warning(f"🟡 **AI Rating: {rating}/100** - High Risk, Proceed with Caution")
-                
-                # SAFE Metrics access
-                col_x, col_y, col_z = st.columns(3)
-                col_x.metric("🔒 Security", f"{data.get('security_score', 0)}/100")
-                col_y.metric("📊 On-Chain", f"{data.get('on_chain_health', 0)}/100") 
-                col_z.metric("📱 Sentiment", f"{data.get('social_sentiment', 0)}/100")
-                
-                # SAFE Real market data access
-                if data.get('real_data'):
-                    st.subheader("📊 Live Market Data")
-                    col_market1, col_market2, col_market3 = st.columns(3)
-                    col_market1.metric("💰 Market Cap", f"${data.get('market_cap', 0):,.0f}")
-                    col_market2.metric("📈 24h Volume", f"${data.get('volume_24h', 0):,.0f}")
-                    col_market3.metric("📊 24h Change", f"{data.get('price_change_24h', 0):+.2f}%")
-                
-                # Risk and Growth info
-                if 'risk_level' in data:
-                    st.subheader("⚠️ Risk Assessment")
-                    risk_color = "🟢" if data['risk_level'] == "Low" else "🟡" if data['risk_level'] == "Medium" else "🔴"
-                    st.write(f"{risk_color} **Risk Level:** {data['risk_level']}")
-                
-                if 'growth_potential' in data:
-                    st.write(f"🚀 **Growth Potential:** {data['growth_potential']}")
-        else:
-            st.info("👆 Enter a token symbol to begin comprehensive AI analysis with real market data")
-            
-            # Show example
-            st.markdown("""
-            **✨ Try These Popular Tokens:**
-            - **BTC** - Bitcoin (Established)
-            - **ETH** - Ethereum (Smart Contracts)
-            - **SOL** - Solana (Fast & Cheap)
-            - **DOGE** - Dogecoin (Meme Power)
-            - **ADA** - Cardano (Academic)
-            """)
+                st.warning(f"🟡 **AI Rating: {rating}/100** – High Risk, proceed cautiously")
+
+        # Top metrics row
+        c1, c2, c3 = st.columns(3)
+        c1.metric("🔒 Security", f"{data.get('security_score', 0):.0f}/100")
+        c2.metric("📊 On‑Chain", f"{data.get('on_chain_health', 0):.0f}/100")
+        c3.metric("📱 Sentiment", f"{data.get('social_sentiment', 0):.0f}/100")
+
+        # 🔴 This is the “option B” part you couldn’t find – now with safe guards:
+        if isinstance(data, dict) and "risk_level" in data:
+            st.subheader("⚠️ Risk Assessment")
+            rl = str(data["risk_level"])
+            risk_color = "🟢" if rl == "Low" else "🟡" if rl == "Medium" else "🔴"
+            st.write(f"{risk_color} **Risk Level:** {rl}")
+
+        if isinstance(data, dict) and "growth_potential" in data:
+            st.write(f"🚀 **Growth Potential:** {data['growth_potential']}")
+
+        # Optional details
+        with st.expander("📋 Details"):
+            mc = data.get("market_cap")
+            vol = data.get("volume_24h")
+            chg = data.get("price_change_24h")
+            if mc is not None:  st.write(f"• **Market Cap:** ${mc:,.0f}")
+            if vol is not None: st.write(f"• **24h Volume:** ${vol:,.0f}")
+            if chg is not None: st.write(f"• **24h Price Change:** {chg:+.2f}%")
 
 def show_gem_detector():
     """Emerging token discovery"""
@@ -4939,179 +4805,10 @@ class GemDetector:
                 "signals": "🏦 VC backing, 📊 Strong fundamentals"
             }
         ]
+if __name__ == "__main__":
+    main()
 
-# ──────────────────────────────────────────────────────────────────────────────
-# AI FUNCTIONS & UTILITIES
-# ──────────────────────────────────────────────────────────────────────────────
 
-def get_user_statistics(user_id):
-    """Get comprehensive user statistics"""
-    conn = sqlite3.connect('trading_platform.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT COUNT(*) FROM backtests WHERE user_id = ?', (user_id,))
-    total_backtests = cursor.fetchone()[0]
-    
-    cursor.execute('SELECT SUM(total_trades) FROM backtests WHERE user_id = ?', (user_id,))
-    total_trades = cursor.fetchone()[0] or 0
-    
-    cursor.execute('SELECT AVG(total_return), MAX(total_return) FROM backtests WHERE user_id = ?', (user_id,))
-    avg_return, best_return = cursor.fetchone()
-    
-    conn.close()
-    
-    return {
-        'total_backtests': total_backtests,
-        'total_trades': total_trades,
-        'avg_return': avg_return or 0.0,
-        'best_return': best_return or 0.0
-    }
-
-# AI Tournament System
-class AIStrategyTournament:
-    def __init__(self, user_id):
-        self.user_id = user_id
-        self.results = {}
-        
-    def run_tournament(self, symbol, days=30):
-        """Run all strategies against the symbol and rank them"""
-        st.info(f"🤖 AI Tournament: Testing {len(TRADING_STRATEGIES)} strategies on {symbol}")
-        
-        # Generate data once
-        _set_seed(42)
-        df = _generate_data(symbol, days, interval_min=1)
-        
-        progress_bar = st.progress(0)
-        results = []
-        
-        for i, (strategy_key, strategy_config) in enumerate(TRADING_STRATEGIES.items()):
-            try:
-                # Convert strategy config to StratV4Config format
-                cfg = self._convert_to_stratv4(strategy_config)
-                
-                # Run backtest
-                stats, trades = backtest_v4(df, cfg)
-                
-                # Calculate AI score
-                ai_score = self._calculate_ai_score(stats, strategy_config)
-                
-                results.append({
-                    'strategy': strategy_config.name,
-                    'key': strategy_key,
-                    'category': strategy_config.category,
-                    'return': stats.ret_pct,
-                    'trades': stats.n_trades,
-                    'win_rate': stats.win_rate,
-                    'profit_factor': stats.pf,
-                    'max_dd': stats.max_dd_pct,
-                    'ai_score': ai_score,
-                    'risk_level': strategy_config.risk_level,
-                    'market_type': strategy_config.market_type
-                })
-                
-                progress_bar.progress((i + 1) / len(TRADING_STRATEGIES))
-                
-            except Exception as e:
-                st.warning(f"⚠️ Strategy {strategy_config.name} failed: {str(e)}")
-        
-        # Sort by AI score
-        results.sort(key=lambda x: x['ai_score'], reverse=True)
-        
-        return results, df
-    
-    def _convert_to_stratv4(self, strategy_config):
-        """Convert strategy config to StratV4Config"""
-        params = strategy_config.parameters
-        
-        return StratV4Config(
-            lookback=params.get('lookback', params.get('period', 20)),
-            atr_mult=params.get('atr_mult', 2.5), 
-            rr=params.get('rr', 3.0),
-            use_macd_filter=params.get('use_macd', strategy_config.name == "🏁 Donchian Breakout + MACD"),
-            use_trend_filter=strategy_config.category == "Trend Following",
-            use_vol_filter=strategy_config.category == "Volatility",
-            risk_per_trade=0.015 if strategy_config.risk_level == "Low" else 0.02 if strategy_config.risk_level == "Medium" else 0.025
-        )
-    
-    def _calculate_ai_score(self, stats, strategy_config):
-        """Calculate AI score based on multiple factors"""
-        # Base score from return
-        return_score = max(0, min(100, stats.ret_pct * 2))
-        
-        # Win rate bonus
-        win_rate_bonus = (stats.win_rate - 50) * 0.5 if stats.win_rate > 50 else 0
-        
-        # Profit factor bonus
-        pf_bonus = min(20, (stats.pf - 1) * 10) if stats.pf > 1 else 0
-        
-        # Risk penalty
-        risk_penalty = abs(stats.max_dd_pct) * 0.3
-        
-        # Trade count bonus
-        trade_bonus = min(10, stats.n_trades * 0.2)
-        
-        final_score = return_score + win_rate_bonus + pf_bonus - risk_penalty + trade_bonus
-        
-        return max(0, min(100, final_score))
-
-# Live Trading Engine
-@dataclass
-class TradeSignal:
-    symbol: str
-    action: str
-    size: float
-    price: float
-    stop_loss: float
-    take_profit: float
-    strategy_name: str
-    confidence: float
-    reasoning: str
-    timestamp: datetime
-
-class LiveTradingEngine:
-    def __init__(self, user_id):
-        self.user_id = user_id
-        self.positions = {}
-        self.balance = 10000.0
-        self.equity = 10000.0
-        self.is_running = False
-        
-    def get_status(self):
-        return {
-            'balance': self.balance,
-            'equity': self.equity,
-            'positions': len(self.positions),
-            'total_pnl': 0.0,
-            'is_running': self.is_running
-        }
-    
-    def start_trading(self):
-        self.is_running = True
-        return True
-        
-    def stop_trading(self):
-        self.is_running = False
-        return True
-    
-    def add_signal(self, signal):
-        pass  # Simplified implementation
-    
-    def _close_position(self, pos_key, reason):
-        pass  # Simplified implementation
-
-def get_trading_engine(user_id):
-    """Get or create trading engine for user"""
-    if 'trading_engines' not in st.session_state:
-        st.session_state.trading_engines = {}
-    
-    if user_id not in st.session_state.trading_engines:
-        st.session_state.trading_engines[user_id] = LiveTradingEngine(user_id)
-    
-    return st.session_state.trading_engines[user_id]
-
-# ──────────────────────────────────────────────────────────────────────────────
-# UI FUNCTIONS (SIMPLIFIED PLACEHOLDER VERSIONS)
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 
